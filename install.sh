@@ -233,8 +233,9 @@ step() { printf '\n==> %s\n' "$*"; }
 
 # compose <args>: docker compose for this install only. Variables exported in
 # the calling shell take precedence over .env in Compose, so every variable the
-# Compose file or .env uses, and every COMPOSE_* one, is unset for the call;
-# the project directory and .env are passed explicitly.
+# Compose file or .env uses, and every COMPOSE_* one, is unset for the call
+# (except what running docker itself needs: PATH, HOME, DOCKER_*, ...); the
+# project directory and .env are passed explicitly.
 compose() {
     (
         for name in $(compose_variable_names); do unset "$name"; done
@@ -248,7 +249,7 @@ compose_variable_names() {
         # shellcheck disable=SC2016 # a literal ${NAME reference in the Compose file
         grep -o '\${[A-Za-z_][A-Za-z0-9_]*' "${DIR}/docker-compose.yml" | sed 's/^\${//'
         env | sed -n 's/^\(COMPOSE_[A-Za-z0-9_]*\)=.*/\1/p'
-    } | sort -u
+    } | sort -u | grep -v -E '^(PATH|HOME|USER|TMPDIR|DOCKER_[A-Za-z0-9_]*|XDG_[A-Za-z0-9_]*)$'
 }
 
 start_server() {

@@ -682,6 +682,14 @@ test_falls_back_to_the_local_image_compose_resolved() {
     assert_output_contains "using the local copy"
 }
 
+test_keeps_path_when_the_env_file_defines_it() {
+    mkdir -p "$DIR"
+    printf 'APP_KEY=base64:abc\nDB_PASSWORD=pw\nAPP_PORT=8000\nMEMRY_IMAGE=img:1\nPATH=/nowhere\nHOME=/nowhere\n' > "${DIR}/.env"
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    assert_log_contains "docker compose run --rm migrate"
+}
+
 # --- run --------------------------------------------------------------------
 
 # shellcheck disable=SC2013 # one test name per line
