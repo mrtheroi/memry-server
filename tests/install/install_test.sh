@@ -40,7 +40,10 @@ case "$*" in
     "compose version --short") echo "${STUB_COMPOSE_VERSION:-2.29.1}"; exit "${STUB_COMPOSE_STATUS:-0}" ;;
     "compose pull") exit "${STUB_PULL_STATUS:-0}" ;;
     "image inspect"*) exit "${STUB_IMAGE_STATUS:-0}" ;;
-    "volume inspect"*) exit "${STUB_VOLUME_STATUS:-1}" ;;
+    "volume inspect"*)
+        [ "${3:-}" = "${STUB_EXISTING_VOLUME:-}" ] && exit 0
+        exit "${STUB_VOLUME_STATUS:-1}"
+        ;;
     *" token "*)
         echo "MEMRY_TOKEN in env: ${MEMRY_TOKEN:-unset}" >> "$STUB_LOG"
         printf 'Token: %s\r\n' "${STUB_TOKEN:-7|AbCdEf123}"
@@ -130,7 +133,7 @@ setup_test() {
     export STUB_LOG STUB_SOURCE="$ROOT"
     unset STUB_DAEMON_STATUS STUB_COMPOSE_VERSION STUB_COMPOSE_STATUS STUB_PULL_STATUS \
         STUB_IMAGE_STATUS STUB_TOKEN STUB_UP_STATUS STUB_MEMRY_VERSION STUB_SETUP_STATUS \
-        STUB_CURL_FAIL STUB_VOLUME_STATUS STUB_CLOCK_STEP
+        STUB_CURL_FAIL STUB_VOLUME_STATUS STUB_EXISTING_VOLUME STUB_CLOCK_STEP
     stub_docker
     stub_curl
     stub_memry
@@ -153,6 +156,7 @@ run_install() {
         ${STUB_SETUP_STATUS:+STUB_SETUP_STATUS="$STUB_SETUP_STATUS"} \
         ${STUB_CURL_FAIL:+STUB_CURL_FAIL="$STUB_CURL_FAIL"} \
         ${STUB_VOLUME_STATUS:+STUB_VOLUME_STATUS="$STUB_VOLUME_STATUS"} \
+        ${STUB_EXISTING_VOLUME:+STUB_EXISTING_VOLUME="$STUB_EXISTING_VOLUME"} \
         ${STUB_CLOCK_STEP:+STUB_CLOCK_STEP="$STUB_CLOCK_STEP"} \
         ${MEMRY_VERSION_OVERRIDE:+MEMRY_VERSION="$MEMRY_VERSION_OVERRIDE"} \
         ${MEMRY_IMAGE_OVERRIDE:+MEMRY_IMAGE="$MEMRY_IMAGE_OVERRIDE"} \
@@ -585,6 +589,17 @@ test_refuses_a_new_env_when_the_database_volume_exists() {
     for left in "$DIR"/* "$DIR"/.[!.]*; do
         case "$left" in */docker-compose.yml | *'/*' | *'/.[!.]*') ;; *) fail "file left: ${left}" ;; esac
     done
+    assert_log_not_contains "compose pull"
+}
+
+test_refuses_a_new_env_when_the_legacy_default_volume_exists() {
+    DIR="${T}/Memry_Community"
+    STUB_EXISTING_VOLUME=memry_community_postgres-data
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 1
+    assert_output_contains "memry_community_postgres-data already exists"
+    assert_output_contains "install into a directory with another name"
+    [ ! -e "${DIR}/.env" ] || fail ".env was created"
     assert_log_not_contains "compose pull"
 }
 

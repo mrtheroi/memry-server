@@ -173,6 +173,12 @@ project_name() {
     printf '%s-%s' "${base:-memry}" "$(printf '%s' "$DIR" | cksum | cut -d ' ' -f 1)"
 }
 
+# Compose's own default project name for the directory: lowercase, only
+# letters, digits, "-" and "_", starting with a letter or digit.
+default_project_name() {
+    basename "$DIR" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-' | sed 's/^[^a-z0-9]*//'
+}
+
 # A new .env starts from the release's example with the values this script
 # owns cleared. An existing .env is kept as is: only empty or missing required
 # values are filled in, so an APP_KEY or DB_PASSWORD already in use is never
@@ -185,9 +191,13 @@ configure_env() {
         project="$(project_name)"
         # A database created by an earlier install of this directory still
         # expects that install's DB_PASSWORD: never generate a new one over it.
-        if docker volume inspect "${project}_postgres-data" >/dev/null 2>&1; then
-            die "${env_file} is missing, but the database volume ${project}_postgres-data already exists and uses the password of the old .env. Restore that .env (it holds APP_KEY and DB_PASSWORD) and run this script again, or delete the volume and every memory in it with: docker volume rm ${project}_postgres-data"
-        fi
+        # An install made before COMPOSE_PROJECT_NAME existed uses Compose's
+        # default project, named after the directory.
+        for volume in "${project}_postgres-data" "$(default_project_name)_postgres-data"; do
+            if docker volume inspect "$volume" >/dev/null 2>&1; then
+                die "${env_file} is missing, but the database volume ${volume} already exists and uses the password of the old .env. Restore that .env (it holds APP_KEY and DB_PASSWORD) and run this script again. If the volume belongs to another installation in a directory with the same name, install into a directory with another name. To delete the volume and every memory in it instead, run: docker volume rm ${volume}"
+            fi
+        done
         fetch docker/community.env.example "${env_file}.new"
         for key in MEMRY_IMAGE APP_KEY APP_URL APP_PORT DB_PASSWORD; do
             env_set "$key" "" "${env_file}.new"
