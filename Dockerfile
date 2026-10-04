@@ -20,9 +20,11 @@ RUN install-php-extensions \
         pcntl
 
 # ---------------------------------------------------------------------------
-# Frontend assets (Vite).
+# Frontend assets (Vite). The built JS and CSS are the same on every
+# architecture, so this stage runs natively on the build machine instead of
+# under QEMU emulation in multi-arch builds.
 # ---------------------------------------------------------------------------
-FROM node:22-alpine AS assets
+FROM --platform=$BUILDPLATFORM node:22-alpine AS assets
 
 WORKDIR /app
 

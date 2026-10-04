@@ -18,7 +18,7 @@ set -eu
 
 # The release this script installs: the raw GitHub files of tag v${MEMRY_VERSION}
 # and the image ghcr.io/mrtheroi/memry-server:${MEMRY_VERSION}.
-MEMRY_VERSION="${MEMRY_VERSION:-0.18.0}"
+MEMRY_VERSION="${MEMRY_VERSION:-0.18.1}"
 MIN_CLI_VERSION="0.7.0"
 DEFAULT_IMAGE="ghcr.io/mrtheroi/memry-server:${MEMRY_VERSION}"
 RAW_BASE="https://raw.githubusercontent.com/mrtheroi/memry-server/v${MEMRY_VERSION}"
