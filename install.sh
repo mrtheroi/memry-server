@@ -216,21 +216,41 @@ configure_env() {
 
 step() { printf '\n==> %s\n' "$*"; }
 
+# compose <args>: docker compose for this install only. Variables exported in
+# the calling shell take precedence over .env in Compose, so every variable the
+# Compose file or .env uses, and every COMPOSE_* one, is unset for the call;
+# the project directory and .env are passed explicitly.
+compose() {
+    (
+        for name in $(compose_variable_names); do unset "$name"; done
+        exec docker compose --project-directory "$DIR" --env-file "${DIR}/.env" "$@"
+    )
+}
+
+compose_variable_names() {
+    {
+        sed -n 's/^[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "${DIR}/.env"
+        # shellcheck disable=SC2016 # a literal ${NAME reference in the Compose file
+        grep -o '\${[A-Za-z_][A-Za-z0-9_]*' "${DIR}/docker-compose.yml" | sed 's/^\${//'
+        env | sed -n 's/^\(COMPOSE_[A-Za-z0-9_]*\)=.*/\1/p'
+    } | sort -u
+}
+
 start_server() {
     cd "$DIR"
     image="$(env_get MEMRY_IMAGE .env)"
     step "Pulling ${image} and PostgreSQL"
-    if ! docker compose pull; then
+    if ! compose pull; then
         docker image inspect "$image" >/dev/null 2>&1 \
             || die "could not pull ${image}. Check your network and the MEMRY_IMAGE value in ${DIR}/.env."
         say "Could not pull ${image}; using the local copy."
     fi
 
     step "Running database migrations"
-    docker compose run --rm migrate || die "migrations failed. See the output above, or run \`docker compose logs postgres\` in ${DIR}."
+    compose run --rm migrate || die "migrations failed. See the output above, or run \`docker compose logs postgres\` in ${DIR}."
 
     step "Starting memry"
-    docker compose up -d app scheduler || die "could not start memry. Run \`docker compose logs app\` in ${DIR}."
+    compose up -d app scheduler || die "could not start memry. Run \`docker compose logs app\` in ${DIR}."
     wait_until_up
 }
 
@@ -264,7 +284,7 @@ parse_token() {
 # The token only lives in the TOKEN variable: it is never written to disk.
 issue_token() {
     step "Creating a token for ${EMAIL}"
-    token_output="$(docker compose run --rm -T app token "$EMAIL")" \
+    token_output="$(compose run --rm -T app token "$EMAIL")" \
         || die "could not create the user and token. Check the logs with: cd ${DIR} && docker compose logs app"
     TOKEN="$(printf '%s\n' "$token_output" | parse_token)"
     token_output=""

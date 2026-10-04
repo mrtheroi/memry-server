@@ -34,6 +34,22 @@ write_stub() {
 stub_docker() {
     write_stub docker <<'STUB'
 #!/bin/sh
+# Compose calls carry --project-directory and --env-file; they are logged on
+# their own line and dropped, so the cases below match the plain commands.
+if [ "${1:-}" = compose ]; then
+    shift
+    flags=""
+    while :; do
+        case "${1:-}" in
+            --project-directory | --env-file) flags="${flags} $1 $2"; shift 2 ;;
+            *) break ;;
+        esac
+    done
+    set -- compose "$@"
+    echo "compose flags:${flags}" >> "$STUB_LOG"
+    # `compose version` (the preflight) reads no project.
+    [ "${2:-}" = version ] || echo "compose env: COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME-unset} DB_PASSWORD=${DB_PASSWORD-unset} APP_PORT=${APP_PORT-unset}" >> "$STUB_LOG"
+fi
 echo "docker $* @ $(pwd)" >> "$STUB_LOG"
 case "$*" in
     "info") exit "${STUB_DAEMON_STATUS:-0}" ;;
@@ -144,6 +160,8 @@ setup_test() {
 
 # Runs install.sh with only the stubs and the system tools on PATH.
 run_install() {
+    # AMBIENT_ENV holds NAME=value words: split on purpose.
+    # shellcheck disable=SC2086
     env -i HOME="$T" PATH="${STUBS}:${SYSBIN}" STUB_LOG="$STUB_LOG" STUB_SOURCE="$STUB_SOURCE" \
         ${STUB_DAEMON_STATUS:+STUB_DAEMON_STATUS="$STUB_DAEMON_STATUS"} \
         ${STUB_COMPOSE_VERSION:+STUB_COMPOSE_VERSION="$STUB_COMPOSE_VERSION"} \
@@ -161,6 +179,7 @@ run_install() {
         ${MEMRY_VERSION_OVERRIDE:+MEMRY_VERSION="$MEMRY_VERSION_OVERRIDE"} \
         ${MEMRY_IMAGE_OVERRIDE:+MEMRY_IMAGE="$MEMRY_IMAGE_OVERRIDE"} \
         ${MEMRY_SOURCE_DIR_OVERRIDE:+MEMRY_SOURCE_DIR="$MEMRY_SOURCE_DIR_OVERRIDE"} \
+        ${AMBIENT_ENV-} \
         sh "$SCRIPT" "$@" > "$OUT" 2>&1
     STATUS=$?
 }
@@ -205,7 +224,7 @@ env_value() {
 run_test() {
     TEST_OK=1
     setup_test
-    unset MEMRY_VERSION_OVERRIDE MEMRY_IMAGE_OVERRIDE MEMRY_SOURCE_DIR_OVERRIDE
+    unset MEMRY_VERSION_OVERRIDE MEMRY_IMAGE_OVERRIDE MEMRY_SOURCE_DIR_OVERRIDE AMBIENT_ENV
     "$1"
     if [ "$TEST_OK" = 1 ]; then
         passed=$((passed + 1))
@@ -601,6 +620,17 @@ test_refuses_a_new_env_when_the_legacy_default_volume_exists() {
     assert_output_contains "install into a directory with another name"
     [ ! -e "${DIR}/.env" ] || fail ".env was created"
     assert_log_not_contains "compose pull"
+}
+
+test_compose_ignores_variables_exported_in_the_calling_shell() {
+    AMBIENT_ENV="COMPOSE_PROJECT_NAME=other DB_PASSWORD=ambient APP_PORT=1234 COMPOSE_FILE=other.yml"
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    assert_log_contains "compose env: COMPOSE_PROJECT_NAME=unset DB_PASSWORD=unset APP_PORT=unset"
+    assert_log_not_contains "=other"
+    assert_log_not_contains "=ambient"
+    assert_log_contains "compose flags: --project-directory ${DIR} --env-file ${DIR}/.env"
+    [ "$(env_value APP_PORT)" = 8000 ] || fail "APP_PORT came from the calling shell"
 }
 
 # --- run --------------------------------------------------------------------
