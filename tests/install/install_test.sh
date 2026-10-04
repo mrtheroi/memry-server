@@ -325,8 +325,8 @@ test_pinned_version_matches_the_latest_changelog_release() {
 test_downloads_the_release_files_into_the_directory() {
     run_install --email you@example.com --dir "$DIR" --no-cli
     assert_status 0
-    assert_log_contains "https://raw.githubusercontent.com/mrtheroi/memry-server/v0.18.0/docker-compose.yml"
-    assert_log_contains "https://raw.githubusercontent.com/mrtheroi/memry-server/v0.18.0/docker/community.env.example"
+    assert_log_contains "https://raw.githubusercontent.com/mrtheroi/memry-server/v0.18.1/docker-compose.yml"
+    assert_log_contains "https://raw.githubusercontent.com/mrtheroi/memry-server/v0.18.1/docker/community.env.example"
     cmp -s "${DIR}/docker-compose.yml" "${ROOT}/docker-compose.yml" || fail "docker-compose.yml not downloaded"
     [ -f "${DIR}/.env" ] || fail ".env not created"
 }
@@ -342,7 +342,7 @@ test_configures_a_new_env_file() {
     printf '%s' "$password" | grep -Eq '^[A-Za-z0-9]{32,}$' || fail "weak or unsafe DB_PASSWORD: $password"
     [ "$(env_value APP_URL)" = "http://localhost:8123" ] || fail "APP_URL is $(env_value APP_URL)"
     [ "$(env_value APP_PORT)" = "8123" ] || fail "APP_PORT is $(env_value APP_PORT)"
-    [ "$(env_value MEMRY_IMAGE)" = "ghcr.io/mrtheroi/memry-server:0.18.0" ] || fail "MEMRY_IMAGE is $(env_value MEMRY_IMAGE)"
+    [ "$(env_value MEMRY_IMAGE)" = "ghcr.io/mrtheroi/memry-server:0.18.1" ] || fail "MEMRY_IMAGE is $(env_value MEMRY_IMAGE)"
     [ "$(grep -c '^APP_KEY=' "${DIR}/.env")" = 1 ] || fail "APP_KEY appears more than once"
     assert_env_is_private
 }
@@ -367,7 +367,7 @@ test_existing_env_only_gets_its_empty_required_values_filled() {
     [ "$(env_value APP_URL)" = "https://memry.example.com" ] || fail "APP_URL was replaced"
     [ "$(env_value MAIL_MAILER)" = "smtp" ] || fail "MAIL_MAILER was replaced"
     [ "$(env_value APP_PORT)" = "8123" ] || fail "missing APP_PORT was not added"
-    [ "$(env_value MEMRY_IMAGE)" = "ghcr.io/mrtheroi/memry-server:0.18.0" ] || fail "missing MEMRY_IMAGE was not added"
+    [ "$(env_value MEMRY_IMAGE)" = "ghcr.io/mrtheroi/memry-server:0.18.1" ] || fail "missing MEMRY_IMAGE was not added"
     assert_env_is_private
 }
 
@@ -417,7 +417,7 @@ test_falls_back_to_a_local_image_only_when_it_exists() {
     STUB_IMAGE_STATUS=1
     run_install --email you@example.com --dir "$DIR" --no-cli
     assert_status 1
-    assert_output_contains "could not pull ghcr.io/mrtheroi/memry-server:0.18.0"
+    assert_output_contains "could not pull ghcr.io/mrtheroi/memry-server:0.18.1"
 }
 
 test_no_cli_prints_the_token_once_with_the_setup_command() {
@@ -507,7 +507,7 @@ test_finishes_with_a_summary() {
     assert_output_contains "docker compose stop"
     assert_output_contains "docker compose up -d app scheduler"
     assert_output_contains "docker compose run --rm migrate"
-    assert_output_contains "https://github.com/mrtheroi/memry-server/blob/v0.18.0/docs/self-hosting.md"
+    assert_output_contains "https://github.com/mrtheroi/memry-server/blob/v0.18.1/docs/self-hosting.md"
 }
 
 test_rejects_bad_options() {

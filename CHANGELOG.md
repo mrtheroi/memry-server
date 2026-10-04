@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.1] - 2026-10-04
+
+### Fixed
+
+- **Release image build**: the Vite assets stage of the `Dockerfile` now runs on the build machine's own platform (`--platform=$BUILDPLATFORM`) instead of under QEMU emulation for `linux/arm64`; the built JavaScript and CSS are the same on every architecture. The 0.18.0 release run hit the 60-minute job timeout while emulating `npm ci` and the Vite build, so **the 0.18.0 image was never published**: use 0.18.1, which has the same features (the one-command `install.sh`)
+  - The release job timeout is raised from 60 to 90 minutes as a safety margin
+- `install.sh`, the README and `docs/self-hosting.md` point at 0.18.1
+
+---
+
 ## [0.18.0] - 2026-10-04
 
 Pairs with memry CLI 0.7.0, which reads the token from `MEMRY_TOKEN` in `memry setup --token`.
