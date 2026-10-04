@@ -55,7 +55,14 @@ case "$*" in
     "info") exit "${STUB_DAEMON_STATUS:-0}" ;;
     "compose version --short") echo "${STUB_COMPOSE_VERSION:-2.29.1}"; exit "${STUB_COMPOSE_STATUS:-0}" ;;
     "compose pull") exit "${STUB_PULL_STATUS:-0}" ;;
-    "image inspect"*) exit "${STUB_IMAGE_STATUS:-0}" ;;
+    "image inspect"*)
+        if [ -n "${STUB_LOCAL_IMAGE:-}" ]; then [ "${3:-}" = "$STUB_LOCAL_IMAGE" ]; exit $?; fi
+        exit "${STUB_IMAGE_STATUS:-0}"
+        ;;
+    "compose config --images app")
+        # The image Compose resolved: STUB_APP_IMAGE, or MEMRY_IMAGE in .env.
+        echo "${STUB_APP_IMAGE:-$(sed -n 's/^MEMRY_IMAGE="*\([^" ]*\).*/\1/p' .env | tail -n 1)}"
+        ;;
     "compose port app 8000")
         # The port Compose published: STUB_PUBLISHED_PORT, or the digits of
         # APP_PORT in .env.
@@ -155,7 +162,8 @@ setup_test() {
     export STUB_LOG STUB_SOURCE="$ROOT"
     unset STUB_DAEMON_STATUS STUB_COMPOSE_VERSION STUB_COMPOSE_STATUS STUB_PULL_STATUS \
         STUB_IMAGE_STATUS STUB_TOKEN STUB_UP_STATUS STUB_MEMRY_VERSION STUB_SETUP_STATUS \
-        STUB_CURL_FAIL STUB_VOLUME_STATUS STUB_EXISTING_VOLUME STUB_CLOCK_STEP STUB_PUBLISHED_PORT
+        STUB_CURL_FAIL STUB_VOLUME_STATUS STUB_EXISTING_VOLUME STUB_CLOCK_STEP STUB_PUBLISHED_PORT \
+        STUB_LOCAL_IMAGE STUB_APP_IMAGE
     stub_docker
     stub_curl
     stub_memry
@@ -182,6 +190,8 @@ run_install() {
         ${STUB_VOLUME_STATUS:+STUB_VOLUME_STATUS="$STUB_VOLUME_STATUS"} \
         ${STUB_EXISTING_VOLUME:+STUB_EXISTING_VOLUME="$STUB_EXISTING_VOLUME"} \
         ${STUB_PUBLISHED_PORT:+STUB_PUBLISHED_PORT="$STUB_PUBLISHED_PORT"} \
+        ${STUB_LOCAL_IMAGE:+STUB_LOCAL_IMAGE="$STUB_LOCAL_IMAGE"} \
+        ${STUB_APP_IMAGE:+STUB_APP_IMAGE="$STUB_APP_IMAGE"} \
         ${STUB_CLOCK_STEP:+STUB_CLOCK_STEP="$STUB_CLOCK_STEP"} \
         ${MEMRY_VERSION_OVERRIDE:+MEMRY_VERSION="$MEMRY_VERSION_OVERRIDE"} \
         ${MEMRY_IMAGE_OVERRIDE:+MEMRY_IMAGE="$MEMRY_IMAGE_OVERRIDE"} \
@@ -659,6 +669,17 @@ test_uses_the_port_compose_published() {
     assert_log_contains "docker compose port app 8000"
     assert_log_contains "http://localhost:9100/up"
     assert_output_contains "memry setup --url http://localhost:9100 --token"
+}
+
+test_falls_back_to_the_local_image_compose_resolved() {
+    mkdir -p "$DIR"
+    # shellcheck disable=SC2016 # a literal Compose interpolation
+    printf 'APP_KEY=base64:abc\nDB_PASSWORD=pw\nAPP_PORT=8000\nMEMRY_IMAGE=${REGISTRY:-ghcr.io/acme}/memry-server:1\n' > "${DIR}/.env"
+    STUB_PULL_STATUS=1 STUB_APP_IMAGE=ghcr.io/acme/memry-server:1 STUB_LOCAL_IMAGE=ghcr.io/acme/memry-server:1
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    assert_log_contains "docker image inspect ghcr.io/acme/memry-server:1"
+    assert_output_contains "using the local copy"
 }
 
 # --- run --------------------------------------------------------------------

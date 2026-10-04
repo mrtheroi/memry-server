@@ -253,7 +253,9 @@ compose_variable_names() {
 
 start_server() {
     cd "$DIR"
-    image="$(env_get MEMRY_IMAGE .env)"
+    # The image as Compose resolves it (interpolation included).
+    image="$(compose config --images app 2>/dev/null | tail -n 1)"
+    [ -n "$image" ] || image="$(env_get MEMRY_IMAGE .env)"
     step "Pulling ${image} and PostgreSQL"
     if ! compose pull; then
         docker image inspect "$image" >/dev/null 2>&1 \

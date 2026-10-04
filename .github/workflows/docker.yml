@@ -38,6 +38,18 @@ jobs:
       - name: Unit tests
         run: sh tests/install/install_test.sh
 
+      # A release tag must be the version install.sh pins; otherwise the
+      # tag's installer would install another release than the one published.
+      - name: Release tag matches the installer version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          # shellcheck disable=SC2016 # matches the literal ${MEMRY_VERSION:- default
+          pinned="$(sed -n 's/^MEMRY_VERSION="${MEMRY_VERSION:-\(.*\)}"$/\1/p' install.sh)"
+          if [ -z "$pinned" ] || [ "v${pinned}" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match MEMRY_VERSION ${pinned:-(not found)} in install.sh"
+            exit 1
+          fi
+
   # Needs the install script checks, so a release whose installer fails them
   # (for example a stale MEMRY_VERSION) is never published. They take seconds.
   build-and-smoke:
