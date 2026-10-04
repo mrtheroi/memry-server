@@ -77,7 +77,9 @@ parse_args() {
     case "$PORT" in
         '' | *[!0-9]*) usage_error "--port must be a number between 1 and 65535" ;;
     esac
-    [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || usage_error "--port must be a number between 1 and 65535"
+    if [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
+        usage_error "--port must be a number between 1 and 65535"
+    fi
     [ -n "$EMAIL" ] || usage_error "--email is required"
     printf '%s' "$EMAIL" | grep -Eq '^[^[:space:]@]+@[^[:space:]@.]+(\.[^[:space:]@.]+)+$' \
         || usage_error "--email is not a valid email address: $EMAIL"
@@ -90,8 +92,9 @@ preflight() {
         || die "Docker is not installed. Install Docker (with Compose v2) first: ${DOCKER_DOCS}"
     compose_version="$(docker compose version --short 2>/dev/null)" || compose_version=""
     compose_major="$(printf '%s' "$compose_version" | sed -n 's/^v\{0,1\}\([0-9][0-9]*\)\..*/\1/p')"
-    [ -n "$compose_major" ] && [ "$compose_major" -ge 2 ] \
-        || die "Docker Compose v2 is required (the \`docker compose\` command). See ${DOCKER_DOCS}"
+    if [ -z "$compose_major" ] || [ "$compose_major" -lt 2 ]; then
+        die "Docker Compose v2 is required (the \`docker compose\` command). See ${DOCKER_DOCS}"
+    fi
     command -v curl >/dev/null 2>&1 || die "curl is required. Install it with your package manager."
     docker info >/dev/null 2>&1 \
         || die "the Docker daemon is not running (or this user cannot reach it). Start Docker and try again. Help: ${DOCKER_DOCS}"
