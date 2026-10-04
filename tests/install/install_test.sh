@@ -56,6 +56,12 @@ case "$*" in
     "compose version --short") echo "${STUB_COMPOSE_VERSION:-2.29.1}"; exit "${STUB_COMPOSE_STATUS:-0}" ;;
     "compose pull") exit "${STUB_PULL_STATUS:-0}" ;;
     "image inspect"*) exit "${STUB_IMAGE_STATUS:-0}" ;;
+    "compose port app 8000")
+        # The port Compose published: STUB_PUBLISHED_PORT, or the digits of
+        # APP_PORT in .env.
+        port="${STUB_PUBLISHED_PORT:-$(sed -n 's/^APP_PORT="*\([0-9]*\).*/\1/p' .env | tail -n 1)}"
+        echo "0.0.0.0:${port:-8000}"
+        ;;
     "volume inspect"*)
         [ "${3:-}" = "${STUB_EXISTING_VOLUME:-}" ] && exit 0
         exit "${STUB_VOLUME_STATUS:-1}"
@@ -149,7 +155,7 @@ setup_test() {
     export STUB_LOG STUB_SOURCE="$ROOT"
     unset STUB_DAEMON_STATUS STUB_COMPOSE_VERSION STUB_COMPOSE_STATUS STUB_PULL_STATUS \
         STUB_IMAGE_STATUS STUB_TOKEN STUB_UP_STATUS STUB_MEMRY_VERSION STUB_SETUP_STATUS \
-        STUB_CURL_FAIL STUB_VOLUME_STATUS STUB_EXISTING_VOLUME STUB_CLOCK_STEP
+        STUB_CURL_FAIL STUB_VOLUME_STATUS STUB_EXISTING_VOLUME STUB_CLOCK_STEP STUB_PUBLISHED_PORT
     stub_docker
     stub_curl
     stub_memry
@@ -175,6 +181,7 @@ run_install() {
         ${STUB_CURL_FAIL:+STUB_CURL_FAIL="$STUB_CURL_FAIL"} \
         ${STUB_VOLUME_STATUS:+STUB_VOLUME_STATUS="$STUB_VOLUME_STATUS"} \
         ${STUB_EXISTING_VOLUME:+STUB_EXISTING_VOLUME="$STUB_EXISTING_VOLUME"} \
+        ${STUB_PUBLISHED_PORT:+STUB_PUBLISHED_PORT="$STUB_PUBLISHED_PORT"} \
         ${STUB_CLOCK_STEP:+STUB_CLOCK_STEP="$STUB_CLOCK_STEP"} \
         ${MEMRY_VERSION_OVERRIDE:+MEMRY_VERSION="$MEMRY_VERSION_OVERRIDE"} \
         ${MEMRY_IMAGE_OVERRIDE:+MEMRY_IMAGE="$MEMRY_IMAGE_OVERRIDE"} \
@@ -631,6 +638,27 @@ test_compose_ignores_variables_exported_in_the_calling_shell() {
     assert_log_not_contains "=ambient"
     assert_log_contains "compose flags: --project-directory ${DIR} --env-file ${DIR}/.env"
     [ "$(env_value APP_PORT)" = 8000 ] || fail "APP_PORT came from the calling shell"
+}
+
+test_reads_env_values_with_inline_comments_like_compose() {
+    mkdir -p "$DIR"
+    printf 'APP_KEY=base64:abc\nDB_PASSWORD=pw  # db\nAPP_PORT=8124 # forwarded port\nAPP_URL=\nMEMRY_IMAGE="img:1" # pinned\n' > "${DIR}/.env"
+    STUB_PULL_STATUS=1 STUB_IMAGE_STATUS=1
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    [ "$(env_value APP_URL)" = "http://localhost:8124" ] || fail "APP_URL is $(env_value APP_URL)"
+    assert_output_contains "could not pull img:1."
+}
+
+test_uses_the_port_compose_published() {
+    mkdir -p "$DIR"
+    # shellcheck disable=SC2016 # a literal Compose interpolation
+    printf 'APP_KEY=base64:abc\nDB_PASSWORD=pw\nAPP_PORT=${CUSTOM_PORT:-9100}\nAPP_URL=http://localhost:9100\nMEMRY_IMAGE=img:1\n' > "${DIR}/.env"
+    STUB_PUBLISHED_PORT=9100
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    assert_log_contains "docker compose port app 8000"
+    assert_log_contains "http://localhost:9100/up"
+    assert_output_contains "memry setup --url http://localhost:9100 --token"
 }
 
 # --- run --------------------------------------------------------------------

@@ -127,9 +127,24 @@ download_files() {
 }
 
 # env_get <key> <file>: the last value assigned to key (empty when unset),
-# without surrounding quotes.
+# read the way Compose reads .env: a quoted value ends at its closing quote,
+# and an unquoted one ends before an inline " #" comment or trailing spaces.
 env_get() {
-    sed -n "s/^$1=//p" "$2" | tail -n 1 | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
+    awk -v key="$1" '
+        { line = $0; sub(/^[ \t]+/, "", line) }
+        index(line, key "=") == 1 {
+            v = substr(line, length(key) + 2)
+            q = substr(v, 1, 1)
+            if ((q == "\"" || q == "\047") && (end = index(substr(v, 2), q)) > 0) {
+                v = substr(v, 2, end - 1)
+            } else {
+                sub(/[ \t]+#.*$/, "", v)
+                sub(/[ \t]+$/, "", v)
+            }
+            value = v
+        }
+        END { printf "%s", value }
+    ' "$2"
 }
 
 # env_has <key> <file>: the key has a non-empty value.
@@ -254,10 +269,21 @@ start_server() {
     wait_until_up
 }
 
+# The host port Compose published for the app (it resolves .env comments,
+# quotes and interpolation), falling back to APP_PORT as read here.
+published_port() {
+    published="$(compose port app 8000 2>/dev/null | tail -n 1)"
+    port="${published##*:}"
+    case "$port" in
+        '' | *[!0-9]*) env_get APP_PORT "${DIR}/.env" ;;
+        *) printf '%s' "$port" ;;
+    esac
+}
+
 # Waits for /up until a wall-clock deadline: slow probes count against the
 # timeout too, and no probe runs past it.
 wait_until_up() {
-    URL="http://localhost:$(env_get APP_PORT .env)"
+    URL="http://localhost:$(published_port)"
     timeout="${MEMRY_UP_TIMEOUT:-120}"
     deadline=$(($(date +%s) + timeout))
     printf 'Waiting for %s/up' "$URL"
