@@ -75,7 +75,8 @@ parse_args() {
     done
     [ -n "$PORT" ] || PORT=8000
     case "$PORT" in
-        '' | *[!0-9]*) usage_error "--port must be a number between 1 and 65535" ;;
+        # At most 5 digits, so the range check below cannot overflow.
+        '' | *[!0-9]* | ??????*) usage_error "--port must be a number between 1 and 65535" ;;
     esac
     if [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
         usage_error "--port must be a number between 1 and 65535"
@@ -100,13 +101,17 @@ preflight() {
         || die "the Docker daemon is not running (or this user cannot reach it). Start Docker and try again. Help: ${DOCKER_DOCS}"
 }
 
-# fetch <path in the repository> <destination>
+# fetch <path in the repository> <destination>: the file goes to a temporary
+# name next to the destination and is moved into place only when complete, so
+# a failed download never leaves a partial file that later runs would keep.
 fetch() {
+    part="$2.part"
     if [ -n "${MEMRY_SOURCE_DIR:-}" ]; then
-        cp "${MEMRY_SOURCE_DIR}/$1" "$2" || die "could not copy ${MEMRY_SOURCE_DIR}/$1"
+        cp "${MEMRY_SOURCE_DIR}/$1" "$part" || { rm -f "$part"; die "could not copy ${MEMRY_SOURCE_DIR}/$1"; }
     else
-        curl -fsSL -o "$2" "${RAW_BASE}/$1" || die "could not download ${RAW_BASE}/$1"
+        curl -fsSL -o "$part" "${RAW_BASE}/$1" || { rm -f "$part"; die "could not download ${RAW_BASE}/$1"; }
     fi
+    mv "$part" "$2"
 }
 
 download_files() {
@@ -160,17 +165,34 @@ generate_password() {
     LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40
 }
 
+# A Compose project name unique to the install directory: its sanitized name
+# plus a checksum of its absolute path. Two installs in directories with the
+# same name would otherwise share a project and its database volume.
+project_name() {
+    base="$(basename "$DIR" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '-' | tr -s '-' | sed -e 's/^-*//' -e 's/-*$//')"
+    printf '%s-%s' "${base:-memry}" "$(printf '%s' "$DIR" | cksum | cut -d ' ' -f 1)"
+}
+
 # A new .env starts from the release's example with the values this script
 # owns cleared. An existing .env is kept as is: only empty or missing required
 # values are filled in, so an APP_KEY or DB_PASSWORD already in use is never
-# replaced.
+# replaced. Only a new .env gets COMPOSE_PROJECT_NAME: an existing install
+# without it keeps Compose's default project (the directory name) and with it
+# its database volume.
 configure_env() {
     env_file="${DIR}/.env"
     if [ ! -f "$env_file" ]; then
+        project="$(project_name)"
+        # A database created by an earlier install of this directory still
+        # expects that install's DB_PASSWORD: never generate a new one over it.
+        if docker volume inspect "${project}_postgres-data" >/dev/null 2>&1; then
+            die "${env_file} is missing, but the database volume ${project}_postgres-data already exists and uses the password of the old .env. Restore that .env (it holds APP_KEY and DB_PASSWORD) and run this script again, or delete the volume and every memory in it with: docker volume rm ${project}_postgres-data"
+        fi
         fetch docker/community.env.example "${env_file}.new"
         for key in MEMRY_IMAGE APP_KEY APP_URL APP_PORT DB_PASSWORD; do
             env_set "$key" "" "${env_file}.new"
         done
+        env_set COMPOSE_PROJECT_NAME "$project" "${env_file}.new"
         mv "${env_file}.new" "$env_file"
     fi
     chmod 600 "$env_file"
@@ -202,19 +224,23 @@ start_server() {
     wait_until_up
 }
 
+# Waits for /up until a wall-clock deadline: slow probes count against the
+# timeout too, and no probe runs past it.
 wait_until_up() {
     URL="http://localhost:$(env_get APP_PORT .env)"
     timeout="${MEMRY_UP_TIMEOUT:-120}"
-    elapsed=0
+    deadline=$(($(date +%s) + timeout))
     printf 'Waiting for %s/up' "$URL"
-    while [ "$elapsed" -lt "$timeout" ]; do
-        if [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "${URL}/up" || true)" = "200" ]; then
+    while :; do
+        remaining=$((deadline - $(date +%s)))
+        [ "$remaining" -gt 0 ] || break
+        [ "$remaining" -le 5 ] || remaining=5
+        if [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time "$remaining" "${URL}/up" || true)" = "200" ]; then
             say " ready."
             return 0
         fi
         printf '.'
         sleep 2
-        elapsed=$((elapsed + 2))
     done
     say ""
     die "memry did not answer ${URL}/up within ${timeout}s. Check the logs with: cd ${DIR} && docker compose logs app"

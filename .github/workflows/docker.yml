@@ -38,8 +38,11 @@ jobs:
       - name: Unit tests
         run: sh tests/install/install_test.sh
 
+  # Needs the install script checks, so a release whose installer fails them
+  # (for example a stale MEMRY_VERSION) is never published. They take seconds.
   build-and-smoke:
     name: Build image and smoke test
+    needs: install-script
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:

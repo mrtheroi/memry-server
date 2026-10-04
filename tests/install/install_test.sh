@@ -18,7 +18,7 @@ failed=0
 # decide exactly which other commands exist.
 SYSBIN="${WORK}/sysbin"
 mkdir -p "$SYSBIN"
-for tool in sh awk base64 basename cat chmod cp cut date dirname env grep head \
+for tool in sh awk base64 basename cat chmod cksum cp cut date dirname env grep head \
     mkdir mktemp mv od openssl printf rm sed sort tail tr uname wc; do
     path="$(command -v "$tool" 2>/dev/null || true)"
     case "$path" in /*) ln -s "$path" "${SYSBIN}/${tool}" ;; esac
@@ -40,6 +40,7 @@ case "$*" in
     "compose version --short") echo "${STUB_COMPOSE_VERSION:-2.29.1}"; exit "${STUB_COMPOSE_STATUS:-0}" ;;
     "compose pull") exit "${STUB_PULL_STATUS:-0}" ;;
     "image inspect"*) exit "${STUB_IMAGE_STATUS:-0}" ;;
+    "volume inspect"*) exit "${STUB_VOLUME_STATUS:-1}" ;;
     *" token "*)
         echo "MEMRY_TOKEN in env: ${MEMRY_TOKEN:-unset}" >> "$STUB_LOG"
         printf 'Token: %s\r\n' "${STUB_TOKEN:-7|AbCdEf123}"
@@ -64,6 +65,10 @@ while [ $# -gt 0 ]; do
     shift
 done
 case "$url" in
+    *"${STUB_CURL_FAIL:-no-failure}")
+        printf 'partial' > "$out"
+        exit 22
+        ;;
     */docker-compose.yml) cp "${STUB_SOURCE}/docker-compose.yml" "$out" ;;
     */community.env.example) cp "${STUB_SOURCE}/docker/community.env.example" "$out" ;;
     *) exit 22 ;;
@@ -93,6 +98,19 @@ exit 0
 STUB
 }
 
+# A fake clock: every `date +%s` call moves it STUB_CLOCK_STEP seconds forward
+# (2 by default, like one sleep between probes).
+stub_date() {
+    write_stub date <<'STUB'
+#!/bin/sh
+clock="${STUB_LOG}.clock"
+[ -f "$clock" ] || echo 1000 > "$clock"
+now="$(cat "$clock")"
+echo $((now + ${STUB_CLOCK_STEP:-2})) > "$clock"
+echo "$now"
+STUB
+}
+
 stub_sleep() {
     write_stub sleep <<'STUB'
 #!/bin/sh
@@ -111,12 +129,14 @@ setup_test() {
     OUT="${T}/out"
     export STUB_LOG STUB_SOURCE="$ROOT"
     unset STUB_DAEMON_STATUS STUB_COMPOSE_VERSION STUB_COMPOSE_STATUS STUB_PULL_STATUS \
-        STUB_IMAGE_STATUS STUB_TOKEN STUB_UP_STATUS STUB_MEMRY_VERSION STUB_SETUP_STATUS
+        STUB_IMAGE_STATUS STUB_TOKEN STUB_UP_STATUS STUB_MEMRY_VERSION STUB_SETUP_STATUS \
+        STUB_CURL_FAIL STUB_VOLUME_STATUS STUB_CLOCK_STEP
     stub_docker
     stub_curl
     stub_memry
     stub_brew
     stub_sleep
+    stub_date
 }
 
 # Runs install.sh with only the stubs and the system tools on PATH.
@@ -131,6 +151,9 @@ run_install() {
         ${STUB_UP_STATUS:+STUB_UP_STATUS="$STUB_UP_STATUS"} \
         ${STUB_MEMRY_VERSION:+STUB_MEMRY_VERSION="$STUB_MEMRY_VERSION"} \
         ${STUB_SETUP_STATUS:+STUB_SETUP_STATUS="$STUB_SETUP_STATUS"} \
+        ${STUB_CURL_FAIL:+STUB_CURL_FAIL="$STUB_CURL_FAIL"} \
+        ${STUB_VOLUME_STATUS:+STUB_VOLUME_STATUS="$STUB_VOLUME_STATUS"} \
+        ${STUB_CLOCK_STEP:+STUB_CLOCK_STEP="$STUB_CLOCK_STEP"} \
         ${MEMRY_VERSION_OVERRIDE:+MEMRY_VERSION="$MEMRY_VERSION_OVERRIDE"} \
         ${MEMRY_IMAGE_OVERRIDE:+MEMRY_IMAGE="$MEMRY_IMAGE_OVERRIDE"} \
         ${MEMRY_SOURCE_DIR_OVERRIDE:+MEMRY_SOURCE_DIR="$MEMRY_SOURCE_DIR_OVERRIDE"} \
@@ -446,7 +469,7 @@ test_finishes_with_a_summary() {
 }
 
 test_rejects_bad_options() {
-    for port in abc 0 70000 80a; do
+    for port in abc 0 70000 80a 99999999999999999999 000008000; do
         run_install --email you@example.com --port "$port"
         assert_status 2
         assert_output_contains "--port must be"
@@ -485,6 +508,84 @@ test_reads_quoted_values_from_an_existing_env() {
     assert_status 0
     assert_log_contains "http://localhost:8124/up"
     assert_output_contains "memry setup --url http://localhost:8124 --token"
+}
+
+test_a_failed_download_leaves_no_partial_file() {
+    for file in docker-compose.yml community.env.example; do
+        DIR="${T}/${file}"
+        STUB_CURL_FAIL="/${file}"
+        run_install --email you@example.com --dir "$DIR" --no-cli
+        assert_status 1
+        assert_output_contains "could not download"
+        leftovers="$(ls -A "$DIR")"
+        [ -z "$leftovers" ] || [ "$leftovers" = "docker-compose.yml" ] || fail "files left in ${DIR}: ${leftovers}"
+        if [ "$file" = docker-compose.yml ] && [ -n "$leftovers" ]; then fail "partial docker-compose.yml kept"; fi
+    done
+    unset STUB_CURL_FAIL
+    DIR="${T}/docker-compose.yml"
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    cmp -s "${DIR}/docker-compose.yml" "${ROOT}/docker-compose.yml" || fail "docker-compose.yml not downloaded on the next run"
+}
+
+test_the_up_timeout_is_wall_clock_time_including_the_probes() {
+    STUB_UP_STATUS=503 STUB_CLOCK_STEP=59
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 1
+    assert_output_contains "within 120s"
+    probes="$(grep -c '/up' "$STUB_LOG")"
+    [ "$probes" = 2 ] || fail "expected 2 probes in 120s with 59s per probe, got ${probes}"
+    assert_log_contains "--max-time 2 "
+}
+
+test_new_installs_get_a_project_name_unique_to_their_directory() {
+    DIR="${T}/a/memry-community"
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    first="$(env_value COMPOSE_PROJECT_NAME)"
+    printf '%s' "$first" | grep -Eq '^memry-community-[0-9]+$' || fail "unexpected project name: ${first}"
+
+    DIR="${T}/b/memry-community"
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    second="$(env_value COMPOSE_PROJECT_NAME)"
+    if [ -z "$second" ] || [ "$second" = "$first" ]; then fail "same basename, same project name: ${first}"; fi
+
+    DIR="${T}/c/My Memry.Server"
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    printf '%s' "$(env_value COMPOSE_PROJECT_NAME)" | grep -Eq '^my-memry-server-[0-9]+$' \
+        || fail "unexpected project name: $(env_value COMPOSE_PROJECT_NAME)"
+}
+
+test_existing_installs_keep_their_project_name() {
+    mkdir -p "$DIR"
+    printf 'APP_KEY=base64:abc\nDB_PASSWORD=pw\n' > "${DIR}/.env"
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    if grep -q '^COMPOSE_PROJECT_NAME=' "${DIR}/.env"; then
+        fail "COMPOSE_PROJECT_NAME added to an existing install (would orphan its volume)"
+    fi
+
+    printf 'COMPOSE_PROJECT_NAME=custom\n' >> "${DIR}/.env"
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    [ "$(env_value COMPOSE_PROJECT_NAME)" = custom ] || fail "COMPOSE_PROJECT_NAME was replaced"
+}
+
+test_refuses_a_new_env_when_the_database_volume_exists() {
+    STUB_VOLUME_STATUS=0
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 1
+    project="$(printf 'memry-%s' "$(printf '%s' "$DIR" | cksum | cut -d ' ' -f 1)")"
+    assert_log_contains "docker volume inspect ${project}_postgres-data"
+    assert_output_contains "${project}_postgres-data already exists"
+    assert_output_contains "docker volume rm ${project}_postgres-data"
+    [ ! -e "${DIR}/.env" ] || fail ".env was created"
+    for left in "$DIR"/* "$DIR"/.[!.]*; do
+        case "$left" in */docker-compose.yml | *'/*' | *'/.[!.]*') ;; *) fail "file left: ${left}" ;; esac
+    done
+    assert_log_not_contains "compose pull"
 }
 
 # --- run --------------------------------------------------------------------

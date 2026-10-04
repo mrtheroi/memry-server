@@ -33,10 +33,14 @@ Without Homebrew, with `--no-cli`, or if setup fails, the script prints the toke
 | Option | Default | |
 | --- | --- | --- |
 | `--email` | required | Email of your memry user |
-| `--dir` | `~/memry-community` | Install directory (also the Compose project name) |
+| `--dir` | `~/memry-community` | Install directory |
 | `--port` | `8000` | Host port; `APP_URL` is `http://localhost:<port>` |
 | `--agents` | asked by `memry setup` | Agents to connect, e.g. `claude-code,codex` |
 | `--no-cli` | | Skip the memry CLI and print the token |
+
+A new `.env` also gets `COMPOSE_PROJECT_NAME`: the directory name plus a checksum of its absolute path (for example `memry-community-1234567890`), so two installs in directories with the same name never share containers or the database volume (`<project>_postgres-data`). It stays the same on every run, and plain `docker compose` commands in the directory use it too. An existing `.env` without it keeps Compose's default project, the directory name, so its volume is not orphaned.
+
+If `.env` is missing but the database volume of that directory's project still exists, the script stops instead of generating a new `DB_PASSWORD` the database would reject. Restore the old `.env` (back it up: it holds `APP_KEY` and `DB_PASSWORD`), or delete the volume and all its data with `docker volume rm <project>_postgres-data`, then run the script again.
 
 Running the script again is safe: an existing `.env` is kept (only empty required values are filled in), so `APP_KEY` and `DB_PASSWORD` never change. Each run issues a new token; revoke old ones with `memory:revoke` (see [Users and tokens](#users-and-tokens)). To upgrade later, follow [Upgrades](#upgrades). Put a TLS proxy in front before exposing the server beyond your machine ([Reverse proxy and TLS](#reverse-proxy-and-tls)).
 
@@ -230,13 +234,13 @@ Keep `APP_KEY` stable across restores and upgrades: login codes are signed with 
 The install script has two more tests, both run by the same workflow:
 
 - `sh tests/install/install_test.sh` unit tests `install.sh` with stubbed `docker`, `curl`, `memry` and `brew` (no Docker needed). It also fails when the version pinned in `install.sh` is not the latest release in the CHANGELOG, so bump both together.
-- `MEMRY_IMAGE=<image> docker/install-e2e.sh` runs `install.sh --no-cli` twice against a real image, with the Compose and env files of the checkout (`MEMRY_SOURCE_DIR`), and checks `/up`, the MCP tools and that `APP_KEY` and `DB_PASSWORD` survive the second run.
+- `MEMRY_IMAGE=<image> docker/install-e2e.sh` runs `install.sh --no-cli` twice against a real image, with the Compose and env files of the checkout (`MEMRY_SOURCE_DIR`), and checks `/up`, the MCP tools that `APP_KEY` and `DB_PASSWORD` survive the second run, and that a run without `.env` refuses to reuse the existing database volume.
 
 ## Releasing (maintainers)
 
 Bump `MEMRY_VERSION` in `install.sh` with `config/api.php`, the README and the CHANGELOG; the unit tests fail otherwise. The install command in the docs points at the tag, so it works once the tag and its image are published.
 
-Pushing a `vX.Y.Z` tag runs `.github/workflows/docker.yml`: it smoke tests the image, then publishes the immutable `X.Y.Z` tag to `ghcr.io/mrtheroi/memry-server`. There are no floating `X.Y` tags. Every tag gets its own run; runs for different tags are neither queued behind each other nor cancelled.
+Pushing a `vX.Y.Z` tag runs `.github/workflows/docker.yml`: it runs the install script checks, smoke tests the image, runs the install script end to end, then publishes the immutable `X.Y.Z` tag to `ghcr.io/mrtheroi/memry-server`. There are no floating `X.Y` tags. Every tag gets its own run; runs for different tags are neither queued behind each other nor cancelled.
 
 `latest` is moved by the last step of the run, after `X.Y.Z` is pushed. That step lists the repository's tags again and points `latest` at `X.Y.Z` only if it is the highest stable `vX.Y.Z` tag at that moment, so an older or backport tag normally does not take it over. If the smoke test or the push fails, `latest` stays where it was.
 

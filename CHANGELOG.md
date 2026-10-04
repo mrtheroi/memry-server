@@ -16,7 +16,10 @@ Pairs with memry CLI 0.7.0, which reads the token from `MEMRY_TOKEN` in `memry s
   - Checks for Docker, Docker Compose v2, curl and a running Docker daemon first, and links to Docker's install docs when one is missing; it never installs Docker
   - Pinned to a release: it downloads `docker-compose.yml` and `docker/community.env.example` from tag `v0.18.0` and uses `ghcr.io/mrtheroi/memry-server:0.18.0`; `MEMRY_VERSION` and `MEMRY_IMAGE` override them
   - Writes `.env` (mode 600) with a generated `APP_KEY`, a random database password, `APP_URL`, `APP_PORT` and `MEMRY_IMAGE`; on a later run an existing `.env` is kept and only empty required values are filled in, so a key or password in use is never regenerated
-  - Pulls the images, migrates, starts `app` and `scheduler`, waits for `/up`, then creates the user and a token with the entrypoint's `token <email>`
+  - A new `.env` gets a `COMPOSE_PROJECT_NAME` unique to the install directory (its name plus a checksum of its absolute path), so two installs in directories with the same name do not share a database volume; an existing install without it keeps Compose's default project
+  - Refuses to create a new `.env` when the directory's database volume already exists, and explains how to restore the old `.env` or remove the volume
+  - Downloads go to a temporary file first, so a failed download never leaves a partial file behind
+  - Pulls the images, migrates, starts `app` and `scheduler`, waits up to 120 seconds of wall-clock time for `/up`, then creates the user and a token with the entrypoint's `token <email>`
   - The token is kept in memory only and handed to `memry setup --url http://localhost:<port> --token` through `MEMRY_TOKEN`; memry is installed with Homebrew when missing and upgraded when older than 0.7.0. Without Homebrew, with `--no-cli` or when setup fails, the token is printed once with the setup command
   - Each run issues a new token; earlier tokens stay valid until revoked
 - **Install script tests**: `tests/install/install_test.sh` unit tests the script with stubbed `docker`, `curl`, `memry` and `brew`, and checks that the pinned version matches the latest CHANGELOG release; `docker/install-e2e.sh` runs it twice against a real image. The `docker` workflow runs ShellCheck and the unit tests, and the end-to-end test against the image built in CI

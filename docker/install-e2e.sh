@@ -4,8 +4,10 @@
 # Runs install.sh (with --no-cli) twice in a temporary directory, reading
 # docker-compose.yml and the example .env from this checkout. After each run it
 # checks that /up answers 200 and that the printed token lists the six memory
-# tools at /mcp/memory; the second run must keep APP_KEY and DB_PASSWORD.
-# Everything is torn down (including volumes) on exit unless KEEP=1.
+# tools at /mcp/memory; the second run must keep APP_KEY and DB_PASSWORD, and a
+# run without .env must refuse to touch the existing database volume.
+# Everything is torn down (including volumes and the directory) on exit unless
+# KEEP=1.
 #
 #   MEMRY_IMAGE=memry-server:ci docker/install-e2e.sh          # image built in CI
 #   MEMRY_IMAGE=ghcr.io/mrtheroi/memry-server:0.17.0 docker/install-e2e.sh
@@ -38,7 +40,11 @@ cleanup() {
             (cd "$install_dir" && docker compose down -v --remove-orphans >/dev/null 2>&1) || true
         fi
     fi
-    rm -rf "$work_dir"
+    if [ "${KEEP:-0}" = "1" ]; then
+        echo "KEEP=1: left ${install_dir} and its containers running"
+    else
+        rm -rf "$work_dir"
+    fi
     exit "$status"
 }
 trap cleanup EXIT
@@ -102,5 +108,19 @@ install
 [ "$(env_value DB_PASSWORD)" = "$db_password" ] || fail "DB_PASSWORD changed on the second run"
 echo "APP_KEY and DB_PASSWORD kept"
 check_server
+
+step "Run without .env while the database volume exists"
+project="$(env_value COMPOSE_PROJECT_NAME)"
+[[ "$project" == memry-install-e2e-* ]] || fail "unexpected COMPOSE_PROJECT_NAME: ${project}"
+docker volume inspect "${project}_postgres-data" >/dev/null || fail "volume ${project}_postgres-data not found"
+mv "${install_dir}/.env" "${work_dir}/saved.env"
+if MEMRY_SOURCE_DIR="$root" MEMRY_IMAGE="$MEMRY_IMAGE" \
+    sh install.sh --email e2e@example.com --dir "$install_dir" --port "$PORT" --no-cli > "${work_dir}/refused.out" 2>&1; then
+    mv "${work_dir}/saved.env" "${install_dir}/.env"
+    fail "install.sh created a new .env over an existing database volume"
+fi
+mv "${work_dir}/saved.env" "${install_dir}/.env"
+grep -q "already exists" "${work_dir}/refused.out" || { cat "${work_dir}/refused.out"; fail "unexpected refusal message"; }
+echo "refused: $(grep -o 'database volume [^ ]* already exists' "${work_dir}/refused.out")"
 
 printf '\nINSTALL E2E PASSED\n'
