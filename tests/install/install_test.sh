@@ -690,6 +690,16 @@ test_keeps_path_when_the_env_file_defines_it() {
     assert_log_contains "docker compose run --rm migrate"
 }
 
+test_keeps_values_assigned_with_spaces_or_a_colon() {
+    mkdir -p "$DIR"
+    printf 'APP_KEY: base64:abc\nDB_PASSWORD = old-password\nAPP_PORT=8000\nMEMRY_IMAGE=img:1\n' > "${DIR}/.env"
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    [ "$(grep -c 'DB_PASSWORD' "${DIR}/.env")" = 1 ] || fail "DB_PASSWORD was added again: $(grep DB_PASSWORD "${DIR}/.env" | tr '\n' '|')"
+    [ "$(grep -c 'APP_KEY' "${DIR}/.env")" = 1 ] || fail "APP_KEY was added again"
+    grep -qx 'DB_PASSWORD = old-password' "${DIR}/.env" || fail "the existing DB_PASSWORD line changed"
+}
+
 # --- run --------------------------------------------------------------------
 
 # shellcheck disable=SC2013 # one test name per line

@@ -127,13 +127,15 @@ download_files() {
 }
 
 # env_get <key> <file>: the last value assigned to key (empty when unset),
-# read the way Compose reads .env: a quoted value ends at its closing quote,
-# and an unquoted one ends before an inline " #" comment or trailing spaces.
+# read the way Compose reads .env: KEY=, KEY = , KEY: and export KEY= are all
+# declarations, a quoted value ends at its closing quote, and an unquoted one
+# ends before an inline " #" comment or trailing spaces.
 env_get() {
     awk -v key="$1" '
-        { line = $0; sub(/^[ \t]+/, "", line) }
-        index(line, key "=") == 1 {
-            v = substr(line, length(key) + 2)
+        BEGIN { declaration = "^[ \t]*(export[ \t]+)?" key "[ \t]*[=:]" }
+        match($0, declaration) {
+            v = substr($0, RLENGTH + 1)
+            sub(/^[ \t]+/, "", v)
             q = substr(v, 1, 1)
             if ((q == "\"" || q == "\047") && (end = index(substr(v, 2), q)) > 0) {
                 v = substr(v, 2, end - 1)
@@ -152,11 +154,15 @@ env_has() {
     [ -n "$(env_get "$1" "$2")" ]
 }
 
-# env_set <key> <value> <file>: replaces the key's line, or appends one.
+# env_set <key> <value> <file>: replaces the key's declaration (in any form
+# env_get reads), or appends one.
 env_set() {
     ENV_SET_VALUE="$2" awk -v key="$1" '
-        BEGIN { value = ENVIRON["ENV_SET_VALUE"]; done = 0 }
-        index($0, key "=") == 1 { if (!done) print key "=" value; done = 1; next }
+        BEGIN {
+            value = ENVIRON["ENV_SET_VALUE"]; done = 0
+            declaration = "^[ \t]*(export[ \t]+)?" key "[ \t]*[=:]"
+        }
+        $0 ~ declaration { if (!done) print key "=" value; done = 1; next }
         { print }
         END { if (!done) print key "=" value }
     ' "$3" > "$3.tmp"
@@ -245,7 +251,7 @@ compose() {
 
 compose_variable_names() {
     {
-        sed -n 's/^[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "${DIR}/.env"
+        sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*[=:].*/\2/p' "${DIR}/.env"
         # shellcheck disable=SC2016 # a literal ${NAME reference in the Compose file
         grep -o '\${[A-Za-z_][A-Za-z0-9_]*' "${DIR}/docker-compose.yml" | sed 's/^\${//'
         env | sed -n 's/^\(COMPOSE_[A-Za-z0-9_]*\)=.*/\1/p'
