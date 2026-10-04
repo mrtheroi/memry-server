@@ -4,21 +4,52 @@ Run your own memry server with Docker. The image bundles the Laravel app served 
 
 ## Requirements
 
-- Docker with Docker Compose v2
+- Docker with Docker Compose v2 ([get Docker](https://docs.docker.com/get-docker/))
 - PostgreSQL 14 or newer. The example Compose file starts one for you (`postgres:16-alpine`); full-text search relies on PostgreSQL, so other databases are not supported.
 
 The server sends no telemetry. It only talks to your database and, if you configure it, your SMTP server.
 
 ## Quick start
 
-There are two ways to run the server:
+### One-command install
 
-- **Published image** (recommended): download two files and pull `ghcr.io/mrtheroi/memry-server`. No clone, no local build.
+With Docker and Compose v2 installed ([get Docker](https://docs.docker.com/get-docker/)), one script starts memry Community and connects your agents:
+
+```bash
+curl -fsSLo install.sh https://raw.githubusercontent.com/mrtheroi/memry-server/v0.18.0/install.sh && sh install.sh --email you@example.com
+```
+
+Read `install.sh` before running it (piping it straight into `sh` skips that). It is pinned to its release and:
+
+1. checks for Docker, Compose v2, curl and a running Docker daemon (it does not install Docker);
+2. downloads that release's `docker-compose.yml` and example `.env` into `~/memry-community`;
+3. writes `.env` (mode 600) with a generated `APP_KEY`, a random `DB_PASSWORD`, `APP_URL`, `APP_PORT` and `MEMRY_IMAGE`;
+4. pulls the images, runs migrations, starts `app` and `scheduler` and waits for `/up`;
+5. creates your user and a token (kept in memory, never written to disk);
+6. installs the [memry CLI](https://github.com/mrtheroi/memry-cli) with Homebrew if it is missing or older than 0.7.0, and runs `memry setup --url http://localhost:<port> --token`, which reads the token from `MEMRY_TOKEN`.
+
+Without Homebrew, with `--no-cli`, or if setup fails, the script prints the token once, with the `memry setup` command to run yourself. Store the token like a password.
+
+| Option | Default | |
+| --- | --- | --- |
+| `--email` | required | Email of your memry user |
+| `--dir` | `~/memry-community` | Install directory (also the Compose project name) |
+| `--port` | `8000` | Host port; `APP_URL` is `http://localhost:<port>` |
+| `--agents` | asked by `memry setup` | Agents to connect, e.g. `claude-code,codex` |
+| `--no-cli` | | Skip the memry CLI and print the token |
+
+Running the script again is safe: an existing `.env` is kept (only empty required values are filled in), so `APP_KEY` and `DB_PASSWORD` never change. Each run issues a new token; revoke old ones with `memory:revoke` (see [Users and tokens](#users-and-tokens)). To upgrade later, follow [Upgrades](#upgrades). Put a TLS proxy in front before exposing the server beyond your machine ([Reverse proxy and TLS](#reverse-proxy-and-tls)).
+
+### Manual setup
+
+There are two ways to set the server up by hand:
+
+- **Published image**: download two files and pull `ghcr.io/mrtheroi/memry-server`. No clone, no local build.
 - **Build from source**: clone the repository and build the image yourself.
 
 Either way, use a directory dedicated to the server. Compose reads the `.env` next to `docker-compose.yml`, so do not run it from a development checkout that already has its own `.env`.
 
-### Using the published image
+#### Using the published image
 
 An image is published to `ghcr.io/mrtheroi/memry-server` for `linux/amd64` and `linux/arm64` when a server release is tagged (`vX.Y.Z`). Each release is tagged `X.Y.Z`; `latest` points to the newest stable release. Pin a release in production; the [tags](https://github.com/mrtheroi/memry-server/tags) and the [CHANGELOG](../CHANGELOG.md) list them.
 
@@ -46,7 +77,7 @@ docker compose run --rm app token you@example.com     # prints "Token: ..." once
 
 `docker compose pull` (without `app`) also pulls PostgreSQL. Only `docker-compose.yml` and `.env` are needed; the `build: .` entry in the Compose file is unused while the image is present.
 
-### Building from source
+#### Building from source
 
 Clone the repository into a dedicated checkout:
 
@@ -121,13 +152,13 @@ Tokens are shown once; store them like passwords.
 
 ## Connecting agents
 
-With the [memry CLI](https://github.com/mrtheroi/memry-cli) 0.6.0 or newer:
+The one-command install does this for you. By hand, with the [memry CLI](https://github.com/mrtheroi/memry-cli) 0.6.0 or newer:
 
 ```bash
 memry setup --url https://memry.example.com --token   # asks for the token, hidden
 ```
 
-`--url` is required with `--token`, so the token is only sent to your server. For scripts, `--token="$MEMRY_TOKEN"` skips the prompt. Keep the quotes: tokens contain a `|`, which the shell would otherwise read as a pipe. A token typed on the command line ends up in the shell history.
+`--url` is required with `--token`, so the token is only sent to your server. For scripts, memry CLI 0.7.0 or newer reads the token from the `MEMRY_TOKEN` environment variable when `--token` has no value, which keeps it out of the process list. With older versions, `--token="$MEMRY_TOKEN"` skips the prompt. Keep the quotes: tokens contain a `|`, which the shell would otherwise read as a pipe. A token typed on the command line ends up in the shell history.
 
 Or add the MCP server to Claude Code directly:
 
@@ -196,7 +227,14 @@ Keep `APP_KEY` stable across restores and upgrades: login codes are signed with 
 
 `docker/smoke.sh` builds the image, starts PostgreSQL, migrates, starts the app, issues a token and checks that `/mcp/memory` lists the six memory tools. It removes its containers and volumes when done. CI runs the same script on every pull request and push to `main` (`.github/workflows/docker.yml`); on a release tag the image is published to GHCR only after the smoke test passes.
 
+The install script has two more tests, both run by the same workflow:
+
+- `sh tests/install/install_test.sh` unit tests `install.sh` with stubbed `docker`, `curl`, `memry` and `brew` (no Docker needed). It also fails when the version pinned in `install.sh` is not the latest release in the CHANGELOG, so bump both together.
+- `MEMRY_IMAGE=<image> docker/install-e2e.sh` runs `install.sh --no-cli` twice against a real image, with the Compose and env files of the checkout (`MEMRY_SOURCE_DIR`), and checks `/up`, the MCP tools and that `APP_KEY` and `DB_PASSWORD` survive the second run.
+
 ## Releasing (maintainers)
+
+Bump `MEMRY_VERSION` in `install.sh` with `config/api.php`, the README and the CHANGELOG; the unit tests fail otherwise. The install command in the docs points at the tag, so it works once the tag and its image are published.
 
 Pushing a `vX.Y.Z` tag runs `.github/workflows/docker.yml`: it smoke tests the image, then publishes the immutable `X.Y.Z` tag to `ghcr.io/mrtheroi/memry-server`. There are no floating `X.Y` tags. Every tag gets its own run; runs for different tags are neither queued behind each other nor cancelled.
 

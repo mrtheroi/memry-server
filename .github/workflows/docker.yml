@@ -1,7 +1,7 @@
 name: docker
 
-# Pull requests and pushes to main: build the image and smoke test it (nothing
-# is pushed). A pushed release tag (vX.Y.Z): build, smoke test the amd64 image,
+# Pull requests and pushes to main: build the image, smoke test it and run
+# install.sh end to end against it (nothing is pushed). A pushed release tag (vX.Y.Z): build, smoke test the amd64 image,
 # then publish the multi-arch image to ghcr.io/<owner>/memry-server as X.Y.Z,
 # and as latest when the tag is the highest stable release.
 on:
@@ -24,6 +24,20 @@ env:
   PUBLISH: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
 
 jobs:
+  install-script:
+    name: Install script (lint and unit tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck
+        run: shellcheck install.sh tests/install/install_test.sh docker/install-e2e.sh
+
+      # Includes the check that install.sh pins the latest CHANGELOG release.
+      - name: Unit tests
+        run: sh tests/install/install_test.sh
+
   build-and-smoke:
     name: Build image and smoke test
     runs-on: ubuntu-latest
@@ -56,6 +70,13 @@ jobs:
           SKIP_BUILD: "1"
           MEMRY_IMAGE: memry-server:ci
         run: docker/smoke.sh
+
+      # install.sh twice (idempotency) with the compose and env files of this
+      # checkout instead of the raw GitHub tag, and without the memry CLI.
+      - name: Install script end to end
+        env:
+          MEMRY_IMAGE: memry-server:ci
+        run: docker/install-e2e.sh
 
       - name: Image metadata
         if: env.PUBLISH == 'true'
