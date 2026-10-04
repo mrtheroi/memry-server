@@ -123,7 +123,17 @@ download_files() {
     esac
     mkdir -p "$DIR"
     DIR="$(cd "$DIR" && pwd)"
+    # The directory as it can be pasted into a shell, for the printed commands.
+    QDIR="$(shell_quote "$DIR")"
     [ -f "${DIR}/docker-compose.yml" ] || fetch docker-compose.yml "${DIR}/docker-compose.yml"
+}
+
+# shell_quote <value>: the value as a shell word, single-quoted when needed.
+shell_quote() {
+    case "$1" in
+        '' | *[!A-Za-z0-9_./-]*) printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;;
+        *) printf '%s' "$1" ;;
+    esac
 }
 
 # env_get <key> <file>: the last value assigned to key (empty when unset),
@@ -271,10 +281,10 @@ start_server() {
     fi
 
     step "Running database migrations"
-    compose run --rm migrate || die "migrations failed. See the output above, or run \`docker compose logs postgres\` in ${DIR}."
+    compose run --rm migrate || die "migrations failed. See the output above, or run: cd ${QDIR} && docker compose logs postgres"
 
     step "Starting memry"
-    compose up -d app scheduler || die "could not start memry. Run \`docker compose logs app\` in ${DIR}."
+    compose up -d app scheduler || die "could not start memry. Run: cd ${QDIR} && docker compose logs app"
     wait_until_up
 }
 
@@ -308,7 +318,7 @@ wait_until_up() {
         sleep 2
     done
     say ""
-    die "memry did not answer ${URL}/up within ${timeout}s. Check the logs with: cd ${DIR} && docker compose logs app"
+    die "memry did not answer ${URL}/up within ${timeout}s. Check the logs with: cd ${QDIR} && docker compose logs app"
 }
 
 # parse_token: reads the entrypoint's `token <email>` output ("Token: <token>").
@@ -320,10 +330,10 @@ parse_token() {
 issue_token() {
     step "Creating a token for ${EMAIL}"
     token_output="$(compose run --rm -T app token "$EMAIL")" \
-        || die "could not create the user and token. Check the logs with: cd ${DIR} && docker compose logs app"
+        || die "could not create the user and token. Check the logs with: cd ${QDIR} && docker compose logs app"
     TOKEN="$(printf '%s\n' "$token_output" | parse_token)"
     token_output=""
-    [ -n "$TOKEN" ] || die "the server did not print a token. Run it by hand: cd ${DIR} && docker compose run --rm app token ${EMAIL}"
+    [ -n "$TOKEN" ] || die "the server did not print a token. Run it by hand: cd ${QDIR} && docker compose run --rm app token ${EMAIL}"
     say "Token created."
 }
 
@@ -407,7 +417,7 @@ memry is running at ${URL}
 
 Directory: ${DIR}
 .env there holds your APP_KEY and database password: keep it private and back
-it up. Manage the server from that directory (cd ${DIR}):
+it up. Manage the server from that directory (cd ${QDIR}):
 
     docker compose stop                       # stop
     docker compose up -d app scheduler        # start

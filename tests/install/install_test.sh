@@ -196,6 +196,7 @@ run_install() {
         ${MEMRY_VERSION_OVERRIDE:+MEMRY_VERSION="$MEMRY_VERSION_OVERRIDE"} \
         ${MEMRY_IMAGE_OVERRIDE:+MEMRY_IMAGE="$MEMRY_IMAGE_OVERRIDE"} \
         ${MEMRY_SOURCE_DIR_OVERRIDE:+MEMRY_SOURCE_DIR="$MEMRY_SOURCE_DIR_OVERRIDE"} \
+        ${MEMRY_UP_TIMEOUT_OVERRIDE:+MEMRY_UP_TIMEOUT="$MEMRY_UP_TIMEOUT_OVERRIDE"} \
         ${AMBIENT_ENV-} \
         sh "$SCRIPT" "$@" > "$OUT" 2>&1
     STATUS=$?
@@ -241,7 +242,8 @@ env_value() {
 run_test() {
     TEST_OK=1
     setup_test
-    unset MEMRY_VERSION_OVERRIDE MEMRY_IMAGE_OVERRIDE MEMRY_SOURCE_DIR_OVERRIDE AMBIENT_ENV
+    unset MEMRY_VERSION_OVERRIDE MEMRY_IMAGE_OVERRIDE MEMRY_SOURCE_DIR_OVERRIDE AMBIENT_ENV \
+        MEMRY_UP_TIMEOUT_OVERRIDE
     "$1"
     if [ "$TEST_OK" = 1 ]; then
         passed=$((passed + 1))
@@ -698,6 +700,14 @@ test_keeps_values_assigned_with_spaces_or_a_colon() {
     [ "$(grep -c 'DB_PASSWORD' "${DIR}/.env")" = 1 ] || fail "DB_PASSWORD was added again: $(grep DB_PASSWORD "${DIR}/.env" | tr '\n' '|')"
     [ "$(grep -c 'APP_KEY' "${DIR}/.env")" = 1 ] || fail "APP_KEY was added again"
     grep -qx 'DB_PASSWORD = old-password' "${DIR}/.env" || fail "the existing DB_PASSWORD line changed"
+}
+
+test_quotes_the_directory_in_recovery_commands() {
+    DIR="${T}/Memry Community"
+    STUB_UP_STATUS=000 MEMRY_UP_TIMEOUT_OVERRIDE=4
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 1
+    assert_output_contains "cd '${DIR}' && docker compose logs app"
 }
 
 # --- run --------------------------------------------------------------------
