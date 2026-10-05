@@ -16,10 +16,10 @@ The server sends no telemetry. It only talks to your database and, if you config
 With Docker and Compose v2 installed ([get Docker](https://docs.docker.com/get-docker/)), one script starts memry Community and connects your agents:
 
 ```bash
-curl -fsSLo install.sh https://raw.githubusercontent.com/mrtheroi/memry-server/v0.18.1/install.sh && sh install.sh --email you@example.com
+f=$(mktemp) && curl -fsSLo "$f" https://raw.githubusercontent.com/mrtheroi/memry-server/v0.18.1/install.sh && sh "$f" --email YOUR_EMAIL
 ```
 
-Read `install.sh` before running it (piping it straight into `sh` skips that). It is pinned to its release and:
+Replace `YOUR_EMAIL` with your email. The command downloads the script to a new temporary file (never overwriting a file in the current directory) and runs it only if the download succeeded. Read it before running it: `curl -fsSL https://raw.githubusercontent.com/mrtheroi/memry-server/v0.18.1/install.sh | less`. It is pinned to its release and:
 
 1. checks for Docker, Compose v2, curl and a running Docker daemon (it does not install Docker);
 2. downloads that release's `docker-compose.yml` and example `.env` into `~/memry-community`;
