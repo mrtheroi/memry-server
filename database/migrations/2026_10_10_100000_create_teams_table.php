@@ -17,6 +17,8 @@ return new class extends Migration
             $table->string('plan')->default('free');
             $table->unsignedInteger('seats')->default(1);
             $table->timestamps();
+            // The partial unique index below cannot serve plain owner lookups (account deletion cascade).
+            $table->index('owner_id');
         });
 
         // Postgres has no unsigned integers; the owner always occupies a seat.

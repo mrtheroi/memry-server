@@ -7,6 +7,7 @@ use App\Team\Infrastructure\Persistence\TeamUserRecord;
 use Illuminate\Database\QueryException;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 
 uses(RefreshDatabase::class);
 
@@ -55,4 +56,10 @@ test('a team created through its factory also has its owner membership', functio
 
     expect($owners)->toHaveCount(1)
         ->and($owners->first()->user_id)->toBe($team->owner_id);
+});
+
+test('teams.owner_id has a non-partial index for owner lookups', function () {
+    $indexes = DB::select("SELECT indexdef FROM pg_indexes WHERE tablename = 'teams' AND indexdef LIKE '%(owner_id)' AND indexdef NOT LIKE '% WHERE %'");
+
+    expect($indexes)->not->toBeEmpty();
 });
