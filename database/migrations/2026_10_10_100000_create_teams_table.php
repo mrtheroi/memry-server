@@ -19,6 +19,10 @@ return new class extends Migration
             $table->timestamps();
         });
 
+        // Postgres has no unsigned integers; the owner always occupies a seat.
+        DB::statement('ALTER TABLE teams ADD CONSTRAINT teams_seats_check CHECK (seats >= 1)');
+        // Target of the composite owner foreign keys declared with team_user.
+        DB::statement('ALTER TABLE teams ADD CONSTRAINT teams_id_owner_id_unique UNIQUE (id, owner_id)');
         DB::statement('CREATE UNIQUE INDEX teams_owner_id_personal_unique ON teams (owner_id) WHERE personal_team');
     }
 

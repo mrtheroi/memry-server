@@ -31,7 +31,6 @@ test('the database rejects a role outside owner, admin and member', function () 
 
 test('a team has exactly one owner but many admins and members', function () {
     $team = TeamRecord::factory()->create();
-    TeamUserRecord::factory()->create(['team_id' => $team->id, 'role' => Role::Owner]);
     TeamUserRecord::factory()->count(2)->create(['team_id' => $team->id, 'role' => Role::Admin]);
     TeamUserRecord::factory()->count(2)->create(['team_id' => $team->id, 'role' => Role::Member]);
 

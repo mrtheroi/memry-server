@@ -1,7 +1,10 @@
 <?php
 
 use App\Models\User;
+use App\Team\Domain\Role;
 use App\Team\Infrastructure\Persistence\TeamRecord;
+use App\Team\Infrastructure\Persistence\TeamUserRecord;
+use Illuminate\Database\QueryException;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
@@ -38,4 +41,18 @@ test('deleting a user deletes the teams they own', function () {
     User::findOrFail($team->owner_id)->delete();
 
     expect(TeamRecord::find($team->id))->toBeNull();
+});
+
+test('the database rejects fewer than one seat', function (int $seats) {
+    expect(fn () => TeamRecord::factory()->create(['seats' => $seats]))
+        ->toThrow(QueryException::class, 'teams_seats_check');
+})->with([0, -1]);
+
+test('a team created through its factory also has its owner membership', function () {
+    $team = TeamRecord::factory()->create();
+
+    $owners = TeamUserRecord::where('team_id', $team->id)->where('role', Role::Owner)->get();
+
+    expect($owners)->toHaveCount(1)
+        ->and($owners->first()->user_id)->toBe($team->owner_id);
 });

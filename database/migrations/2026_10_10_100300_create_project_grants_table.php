@@ -15,6 +15,7 @@ return new class extends Migration
             $table->timestamps();
 
             $table->unique(['project_id', 'user_id']);
+            $table->index('user_id');
         });
     }
 

@@ -1,11 +1,14 @@
 <?php
 
+use App\Memory\Domain\ProjectName;
 use App\Models\User;
 use App\Team\Infrastructure\Persistence\ProjectGrantRecord;
 use App\Team\Infrastructure\Persistence\ProjectRecord;
 use App\Team\Infrastructure\Persistence\TeamRecord;
+use Illuminate\Database\QueryException;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 
 uses(RefreshDatabase::class);
 
@@ -36,3 +39,25 @@ test('deleting a team deletes its projects and their grants', function () {
     expect(ProjectRecord::find($project->id))->toBeNull()
         ->and(ProjectGrantRecord::find($grant->id))->toBeNull();
 });
+
+test('a user_id index exists on project_grants', function () {
+    $indexes = collect(DB::select("SELECT indexdef FROM pg_indexes WHERE tablename = 'project_grants'"))
+        ->pluck('indexdef');
+
+    expect($indexes->contains(fn ($def) => str_contains($def, '(user_id)')))->toBeTrue();
+});
+
+test('the database accepts a canonical project name', function () {
+    expect(ProjectRecord::factory()->create(['name' => 'dbmcp']))->toBeInstanceOf(ProjectRecord::class);
+});
+
+test('the database rejects a non-canonical project name', function (string $name) {
+    expect(fn () => ProjectRecord::factory()->create(['name' => $name]))
+        ->toThrow(QueryException::class, 'projects_name_canonical_check');
+})->with(['DbMcp', ' dbmcp ', 'a--b', 'a__b', '']);
+
+test('the database accepts whatever ProjectName::normalize produces', function (string $input) {
+    $name = ProjectName::normalize($input);
+
+    expect(ProjectRecord::factory()->create(['name' => $name]))->toBeInstanceOf(ProjectRecord::class);
+})->with(['  DbMcp  ', 'My---Project', 'a___b', "\tFoo-_Bar\n", 'x--y__z', 'Ünïcode-Näme', 'plain']);
