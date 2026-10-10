@@ -9,6 +9,7 @@ use App\Mcp\Tools\SearchMemory;
 use App\Mcp\Tools\SessionSummary;
 use App\Memory\Application\BuildProjectContext;
 use App\Memory\Application\SaveObservation;
+use App\Memory\Domain\MemoryRepository;
 use App\Memory\Domain\Observation;
 use App\Memory\Infrastructure\Persistence\EloquentMemoryRepository;
 use App\Models\User;
@@ -46,8 +47,13 @@ test('save-memory answers with the exact saved text and the same id on a topic k
     $id = (int) DB::table('observations')->value('id');
     MemoryServer::actingAs($user)->tool(SaveMemory::class, [...$arguments, 'content' => 'B'])
         ->assertExactText("Memory saved with id {$id}.");
-    MemoryServer::actingAs($user)->tool(SaveMemory::class, [...$arguments, 'topic_key' => 'new'])
-        ->assertExactText('Memory saved with id '.DB::table('observations')->max('id').'.');
+    $rowsBefore = DB::table('observations')->count();
+    $response = MemoryServer::actingAs($user)->tool(SaveMemory::class, [...$arguments, 'topic_key' => 'new']);
+
+    $newId = (int) DB::table('observations')->max('id');
+    expect($newId)->toBeGreaterThan($id)
+        ->and(DB::table('observations')->count())->toBe($rowsBefore + 1);
+    $response->assertExactText("Memory saved with id {$newId}.");
 });
 
 test('get-memory answers with the exact memory text', function () {
@@ -187,21 +193,33 @@ test('an upsert that changes the content moves updated_at and keeps the id, one 
     expect(recall($user, $first->id)->updatedAt->format('Y-m-d H:i:s'))->toBe('2026-09-03 10:00:00');
 });
 
-test('two interleaved upserts of the same new topic key leave two rows today, and a later upsert still creates no third', function () {
+test('two interleaved SaveObservation calls on the same new topic key leave two rows today, and a later one still creates no third', function () {
     $user = User::factory()->create();
-    $repository = new EloquentMemoryRepository;
-    $lookup = fn () => $repository->findByTopicKey($user->id, 'dbmcp', 'project', 'architecture/auth');
 
-    // Both writers look up before either saves: the race the code does not guard against.
-    $seenByA = $lookup();
-    $seenByB = $lookup();
-    $repository->save(observation($user, ['content' => 'Writer A']));
-    $repository->save(observation($user, ['content' => 'Writer B']));
+    // Deterministic interleaving, no threads: the repository is final, so a Mockery double of
+    // the MemoryRepository interface delegates to the real one. Its first topic key lookup
+    // misses, then (before returning to caller A) runs caller B's whole SaveObservation.
+    // Both lookups therefore miss before either save: the race the use case does not guard against.
+    $real = new EloquentMemoryRepository;
+    $interleave = fn () => null;
+    $repository = Mockery::mock(MemoryRepository::class);
+    $repository->shouldReceive('save')->andReturnUsing(fn (Observation $o) => $real->save($o));
+    $repository->shouldReceive('findByTopicKey')->andReturnUsing(function (...$arguments) use ($real, &$interleave) {
+        $found = $real->findByTopicKey(...$arguments);
+        $interleaved = $interleave;
+        $interleave = fn () => null;
+        $interleaved();
 
-    expect($seenByA)->toBeNull()->and($seenByB)->toBeNull();
+        return $found;
+    });
+    $save = new SaveObservation($repository);
+    $interleave = fn () => $save(observation($user, ['content' => 'Writer B']));
+
+    $save(observation($user, ['content' => 'Writer A']));
+
     $this->assertDatabaseCount('observations', 2);
 
-    app(SaveObservation::class)(observation($user, ['content' => 'Writer C']));
+    $save(observation($user, ['content' => 'Writer C']));
 
     $this->assertDatabaseCount('observations', 2);
 });

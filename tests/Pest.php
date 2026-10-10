@@ -55,11 +55,24 @@ function something()
 }
 
 /*
- * Exact response text of an MCP tool, for goldens (assertSee only matches substrings).
+ * Exact response text of a successful MCP tool result, for goldens
+ * (assertSee only matches substrings). An error result never passes.
  */
 TestResponse::macro('assertExactText', function (string $text) {
     /** @var TestResponse $this */
+    $this->assertHasNoErrors();
     Assert::assertSame([$text], $this->content(), 'The MCP response text does not match exactly.');
+
+    return $this;
+});
+
+/*
+ * Exact text of an MCP error result: pins that today's response IS an error.
+ */
+TestResponse::macro('assertExactError', function (string $text) {
+    /** @var TestResponse $this */
+    $this->assertHasErrors();
+    Assert::assertSame([$text], $this->errors(), 'The MCP error text does not match exactly.');
 
     return $this;
 });
