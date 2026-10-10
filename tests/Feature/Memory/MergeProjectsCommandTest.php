@@ -1,7 +1,6 @@
 <?php
 
 use App\Memory\Domain\UserPrompt;
-use App\Memory\Infrastructure\Persistence\EloquentMemoryRepository;
 use App\Memory\Infrastructure\Persistence\EloquentPromptRepository;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -171,8 +170,6 @@ test('it keeps the moved observations searchable under the new project', functio
 
     $this->artisan('memory:merge-projects', ['from' => 'dbmcp', 'to' => 'memry'])->assertSuccessful();
 
-    $repository = new EloquentMemoryRepository;
-
-    expect($repository->search($user->id, 'sanctum', limit: 10, project: 'memry'))->toHaveCount(1)
-        ->and($repository->search($user->id, 'sanctum', limit: 10, project: 'dbmcp'))->toBeEmpty();
+    expect(searchFor($user, 'sanctum', limit: 10, project: 'memry'))->toHaveCount(1)
+        ->and(searchFor($user, 'sanctum', limit: 10, project: 'dbmcp'))->toBeEmpty();
 });
