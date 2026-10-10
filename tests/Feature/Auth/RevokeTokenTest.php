@@ -10,7 +10,8 @@ test('it revokes the token used for the request and answers 204', function () {
     $token = $user->createToken('memry-cli');
 
     $this->withToken($token->plainTextToken)->deleteJson('/api/auth/token')
-        ->assertNoContent();
+        ->assertNoContent()
+        ->assertContent('');
 
     expect($user->tokens()->whereKey($token->accessToken->id)->exists())->toBeFalse();
 });
