@@ -1,0 +1,58 @@
+name: tests
+
+# Pull requests and pushes to main: run the Pest suite against Postgres (the
+# same pgvector image as the local dbmcp-pg-test container) and check the code
+# style with Pint. Laravel Cloud auto-deploys main, so this is what stands
+# between a broken test and production.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pest:
+    name: Pest and Pint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: dbmcp
+          POSTGRES_PASSWORD: secret
+          POSTGRES_DB: dbmcp_testing
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dbmcp -d dbmcp_testing"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          extensions: pdo_pgsql, pgsql
+          coverage: none
+
+      - name: Install dependencies
+        run: composer install --no-interaction --no-progress --prefer-dist
+
+      # phpunit.xml sets the database; the app key is generated per run.
+      - name: Generate an app key
+        run: echo "APP_KEY=base64:$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+
+      - name: Pint
+        run: ./vendor/bin/pint --test
+
+      - name: Pest
+        run: ./vendor/bin/pest
