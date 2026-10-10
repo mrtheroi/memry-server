@@ -4,6 +4,8 @@ use App\Memory\Domain\Observation;
 use App\Memory\Infrastructure\Persistence\EloquentMemoryRepository;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Laravel\Mcp\Server\Testing\TestResponse;
+use PHPUnit\Framework\Assert;
 use Tests\TestCase;
 
 /*
@@ -52,9 +54,54 @@ function something()
     // ..
 }
 
+/*
+ * Exact response text of a successful MCP tool result, for goldens
+ * (assertSee only matches substrings). An error result never passes.
+ */
+TestResponse::macro('assertExactText', function (string $text) {
+    /** @var TestResponse $this */
+    $this->assertHasNoErrors();
+    Assert::assertSame([$text], $this->content(), 'The MCP response text does not match exactly.');
+
+    return $this;
+});
+
+/*
+ * Exact text of an MCP error result: pins that today's response IS an error.
+ */
+TestResponse::macro('assertExactError', function (string $text) {
+    /** @var TestResponse $this */
+    $this->assertHasErrors();
+    Assert::assertSame([$text], $this->errors(), 'The MCP error text does not match exactly.');
+
+    return $this;
+});
+
+/*
+ * Thin wrappers over the repositories, so a later slice that changes their
+ * signatures only touches these helpers, never the test bodies.
+ */
+function contextFor(User $user): int
+{
+    return $user->id;
+}
+
+function recall(User $user, int $id): ?Observation
+{
+    return (new EloquentMemoryRepository)->find($id);
+}
+
+/**
+ * @return list<Observation>
+ */
+function searchFor(User $user, string $query, int $limit = 10, ?string $project = null): array
+{
+    return (new EloquentMemoryRepository)->search(contextFor($user), $query, $limit, $project);
+}
+
 function remember(User $user, string $title, string $content, string $project = 'dbmcp', string $type = 'decision', ?string $topicKey = null): Observation
 {
-    return (new EloquentMemoryRepository())->save(new Observation(
+    return (new EloquentMemoryRepository)->save(new Observation(
         userId: $user->id,
         sessionId: 'session-1',
         type: $type,
