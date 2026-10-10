@@ -177,3 +177,39 @@ test('it rate limits account deletion attempts per user', function () {
     $this->withToken($token)->deleteJson('/api/account', ['email' => 'grace@example.com'])
         ->assertTooManyRequests();
 });
+
+test('it answers an empty 204 and wipes every row of a user with several tokens', function () {
+    $user = User::factory()->create(['email' => 'ada@example.com']);
+    $current = $user->createToken('memry-cli')->plainTextToken;
+    $other = $user->createToken('claude-code')->plainTextToken;
+    $third = $user->createToken('mcp')->plainTextToken;
+    remember($user, 'Auth model', 'Sanctum bearer tokens');
+    remember($user, 'Search', 'Postgres FTS', project: 'memry');
+    (new EloquentPromptRepository)->save(new UserPrompt($user->id, 'session-1', 'dbmcp', 'Add login'));
+
+    $this->withToken($current)->deleteJson('/api/account', ['email' => 'ada@example.com'])
+        ->assertNoContent()
+        ->assertContent('');
+
+    $this->assertDatabaseCount('users', 0);
+    $this->assertDatabaseCount('observations', 0);
+    $this->assertDatabaseCount('user_prompts', 0);
+    $this->assertDatabaseCount('personal_access_tokens', 0);
+
+    foreach ([$other, $third] as $token) {
+        $this->app['auth']->forgetGuards();
+        $this->withToken($token)->getJson('/api/context?project=dbmcp')->assertUnauthorized();
+    }
+});
+
+test('it answers the exact validation json when the email does not match', function () {
+    $user = User::factory()->create(['email' => 'ada@example.com']);
+    $token = $user->createToken('memry-cli')->plainTextToken;
+
+    $this->withToken($token)->deleteJson('/api/account', ['email' => 'grace@example.com'])
+        ->assertUnprocessable()
+        ->assertExactJson([
+            'message' => 'The email does not match your account.',
+            'errors' => ['email' => ['The email does not match your account.']],
+        ]);
+});

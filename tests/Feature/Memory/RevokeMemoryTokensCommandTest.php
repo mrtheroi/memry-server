@@ -43,3 +43,24 @@ test('it finds the user when the email differs in case or spacing', function () 
 
     expect($user->tokens()->count())->toBe(0);
 });
+
+test('it prints exactly the revoked count and exits 0, also for a user without tokens', function (int $tokens, string $line) {
+    $user = User::factory()->create(['email' => 'me@example.com']);
+    for ($i = 0; $i < $tokens; $i++) {
+        $user->createToken("t{$i}");
+    }
+
+    $this->artisan('memory:revoke', ['email' => 'me@example.com'])
+        ->expectsOutput($line)
+        ->assertExitCode(0);
+})->with([
+    'none' => [0, 'Revoked 0 tokens.'],
+    'one' => [1, 'Revoked 1 tokens.'],
+    'three' => [3, 'Revoked 3 tokens.'],
+]);
+
+test('it prints exactly the not-found line and exits 1', function () {
+    $this->artisan('memory:revoke', ['email' => ' Ghost@Example.COM '])
+        ->expectsOutput('User ghost@example.com not found.')
+        ->assertExitCode(1);
+});

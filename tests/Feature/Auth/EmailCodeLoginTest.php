@@ -215,3 +215,58 @@ test('it limits each IP to 20 token requests per minute', function () {
 
     $this->postJson('/api/auth/token', ['email' => 'user21@example.com', 'code' => '123456'])->assertTooManyRequests();
 });
+
+test('it answers the exact validation json for an invalid email', function () {
+    $this->postJson('/api/auth/code', ['email' => 'not-an-email'])
+        ->assertUnprocessable()
+        ->assertExactJson([
+            'message' => 'The email field must be a valid email address.',
+            'errors' => ['email' => ['The email field must be a valid email address.']],
+        ]);
+});
+
+test('it answers the exact validation json when the token request is empty', function () {
+    $this->postJson('/api/auth/token', [])
+        ->assertUnprocessable()
+        ->assertExactJson([
+            'message' => 'The email field is required. (and 1 more error)',
+            'errors' => [
+                'email' => ['The email field is required.'],
+                'code' => ['The code field is required.'],
+            ],
+        ]);
+});
+
+test('it answers the exact token json, a sanctum plain text token, for a valid code', function () {
+    $code = requestLoginCode('ada@example.com');
+
+    $response = $this->postJson('/api/auth/token', ['email' => 'ada@example.com', 'code' => $code])->assertOk();
+
+    expect(array_keys($response->json()))->toBe(['token'])
+        ->and($response->json('token'))->toMatch('/^\d+\|[A-Za-z0-9]{48}$/');
+});
+
+test('it answers 429 with the throttle message and a retry-after header', function () {
+    foreach (range(1, 3) as $request) {
+        $this->postJson('/api/auth/code', ['email' => 'ada@example.com'])->assertAccepted();
+    }
+
+    $this->postJson('/api/auth/code', ['email' => 'ada@example.com'])
+        ->assertTooManyRequests()
+        ->assertJsonPath('message', 'Too Many Attempts.')
+        ->assertHeader('Retry-After');
+
+    Mail::assertSentCount(3);
+});
+
+test('it keeps the token throttle bucket per IP regardless of the email', function () {
+    foreach (range(1, 20) as $request) {
+        $this->postJson('/api/auth/token', ['email' => 'ada@example.com', 'code' => '123456'])->assertUnprocessable();
+    }
+
+    $this->postJson('/api/auth/token', ['email' => 'ada@example.com', 'code' => '123456'])
+        ->assertTooManyRequests()
+        ->assertJsonPath('message', 'Too Many Attempts.');
+    $this->withServerVariables(['REMOTE_ADDR' => '10.0.0.2'])
+        ->postJson('/api/auth/token', ['email' => 'ada@example.com', 'code' => '123456'])->assertUnprocessable();
+});

@@ -90,3 +90,51 @@ test('it limits each user to 60 context requests per minute', function () {
 
     $this->withToken($token)->get('/api/context?project=dbmcp')->assertTooManyRequests();
 });
+
+test('it returns the exact context text of a known project', function () {
+    $user = User::factory()->create();
+    $token = $user->createToken('claude-code')->plainTextToken;
+
+    $session = remember($user, 'Session one', 'Summary content', type: 'session_summary');
+    $knowledge = remember($user, 'Auth model', 'Sanctum bearer tokens', topicKey: 'architecture/auth');
+    $recent = remember($user, 'Fixed flaky token test', 'Root cause: clock drift');
+
+    $this->withToken($token)->get('/api/context?project=dbmcp')
+        ->assertOk()
+        ->assertContent(<<<TEXT
+            ## Recent sessions
+            #{$session->id} [session_summary] Session one
+            Summary content
+
+            ## Project knowledge
+            - #{$knowledge->id} [decision] Auth model: Sanctum bearer tokens
+
+            ## Recent memories
+            - #{$recent->id} [decision] Fixed flaky token test
+
+            Use get-memory with an id to read a memory in full.
+            TEXT);
+});
+
+test('it pins the exact no-context text of an unknown project', function () {
+    $token = User::factory()->create()->createToken('claude-code')->plainTextToken;
+
+    $this->withToken($token)->get('/api/context?project=nothing-here')
+        ->assertOk()
+        ->assertContent('No context found for project nothing-here.');
+});
+
+test('it answers 422 and never reaches the use case when the project is empty or blank', function (string $query) {
+    $token = User::factory()->create()->createToken('claude-code')->plainTextToken;
+
+    $this->withToken($token)->getJson('/api/context'.$query)
+        ->assertUnprocessable()
+        ->assertExactJson([
+            'message' => 'The project field is required.',
+            'errors' => ['project' => ['The project field is required.']],
+        ]);
+})->with([
+    'missing' => [''],
+    'empty' => ['?project='],
+    'blank' => ['?project=%20%20'],
+]);

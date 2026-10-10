@@ -173,3 +173,41 @@ test('it keeps the moved observations searchable under the new project', functio
     expect(searchFor($user, 'sanctum', limit: 10, project: 'memry'))->toHaveCount(1)
         ->and(searchFor($user, 'sanctum', limit: 10, project: 'dbmcp'))->toBeEmpty();
 });
+
+test('it prints exactly the two summary lines and exits 0', function () {
+    $user = User::factory()->create();
+
+    remember($user, 'Auth in dbmcp', 'Content', topicKey: 'architecture/auth');
+    remember($user, 'Auth in memry', 'Content', project: 'memry', topicKey: 'architecture/auth');
+    remember($user, 'Plain', 'Content');
+    prompt($user, 'Own prompt');
+
+    $this->artisan('memory:merge-projects', ['from' => 'dbmcp', 'to' => 'memry'])
+        ->expectsOutput('Moved 2 observations and 1 prompts from dbmcp to memry.')
+        ->expectsOutput('1 topic_key collisions (same user and topic_key now twice in memry) left to resolve.')
+        ->assertExitCode(0);
+});
+
+test('it prints exactly the summary lines with --email and counts only that user', function () {
+    $user = User::factory()->create(['email' => 'me@example.com']);
+    $other = User::factory()->create();
+
+    remember($user, 'Own', 'Content');
+    remember($other, 'Other', 'Content');
+    remember($other, 'Other two', 'Content');
+
+    $this->artisan('memory:merge-projects', ['from' => 'dbmcp', 'to' => 'memry', '--email' => 'me@example.com'])
+        ->expectsOutput('Moved 1 observations and 0 prompts from dbmcp to memry.')
+        ->expectsOutput('0 topic_key collisions (same user and topic_key now twice in memry) left to resolve.')
+        ->assertExitCode(0);
+});
+
+test('it prints exactly one error line and exits 1 on each refusal', function (array $arguments, string $line) {
+    $this->artisan('memory:merge-projects', $arguments)
+        ->expectsOutput($line)
+        ->assertExitCode(1);
+})->with([
+    'blank' => [['from' => ' ', 'to' => 'memry'], 'Project names must not be blank.'],
+    'same' => [['from' => 'A', 'to' => 'a'], 'Cannot merge project a into itself.'],
+    'unknown user' => [['from' => 'a', 'to' => 'b', '--email' => ' Ghost@Example.COM '], 'User ghost@example.com not found.'],
+]);

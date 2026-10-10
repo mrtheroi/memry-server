@@ -2,6 +2,7 @@
 
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Artisan;
 
 uses(RefreshDatabase::class);
 
@@ -58,4 +59,32 @@ test('it stores the email of a created user trimmed and lowercased', function ()
         ->assertSuccessful();
 
     expect(User::sole()->email)->toBe('cloud@example.com');
+});
+
+test('it prints exactly one Token line with a sanctum plain text token and exits 0', function (array $arguments) {
+    User::factory()->create(['email' => 'me@example.com']);
+
+    $exit = Artisan::call('memory:token', $arguments + ['email' => 'me@example.com']);
+
+    expect($exit)->toBe(0)
+        ->and(Artisan::output())->toMatch('/\AToken: \d+\|[A-Za-z0-9]{48}\n\z/');
+})->with([
+    'existing user' => [[]],
+    'existing user with --create' => [['--create' => true]],
+]);
+
+test('it prints the same Token line for a user created with --create', function () {
+    $exit = Artisan::call('memory:token', ['email' => 'new@example.com', '--create' => true]);
+
+    expect($exit)->toBe(0)
+        ->and(Artisan::output())->toMatch('/\AToken: \d+\|[A-Za-z0-9]{48}\n\z/');
+    expect(User::sole()->tokens()->sole()->name)->toBe('mcp');
+    expect(User::sole()->name)->toBe('new@example.com');
+});
+
+test('it prints exactly the failure line and exits 1 for an unknown email when not confirmed', function () {
+    $this->artisan('memory:token', ['email' => 'ghost@example.com'])
+        ->expectsConfirmation('User ghost@example.com does not exist. Create it?', 'no')
+        ->expectsOutput('No token issued.')
+        ->assertExitCode(1);
 });
