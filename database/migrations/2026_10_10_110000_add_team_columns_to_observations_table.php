@@ -29,11 +29,21 @@ return new class extends Migration
         ] as $column => [$table, $onDelete]) {
             DB::statement("ALTER TABLE observations ADD CONSTRAINT observations_{$column}_foreign FOREIGN KEY ({$column}) REFERENCES {$table}(id) ON DELETE {$onDelete} NOT VALID");
         }
+
+        // A row's project must belong to the row's team. The target needs a
+        // unique key on (id, team_id); the table is empty in production, so
+        // the index build is instant. The composite FK (MATCH SIMPLE) skips
+        // rows with a NULL project_id or team_id; the single project_id FK
+        // above keeps handling project deletion (SET NULL).
+        DB::statement('ALTER TABLE projects ADD CONSTRAINT projects_id_team_id_unique UNIQUE (id, team_id)');
+        DB::statement('ALTER TABLE observations ADD CONSTRAINT observations_project_team_foreign FOREIGN KEY (project_id, team_id) REFERENCES projects (id, team_id) NOT VALID');
     }
 
     public function down(): void
     {
         DB::statement("SET LOCAL lock_timeout = '5s'");
+
+        DB::statement('ALTER TABLE observations DROP CONSTRAINT observations_project_team_foreign');
 
         Schema::table('observations', function (Blueprint $table) {
             $table->dropForeign(['team_id']);
@@ -42,5 +52,8 @@ return new class extends Migration
             $table->dropForeign(['updated_by']);
             $table->dropColumn(['team_id', 'project_id', 'created_by', 'updated_by']);
         });
+
+        // user_prompts' composite FK is already gone: its migration rolls back first.
+        DB::statement('ALTER TABLE projects DROP CONSTRAINT projects_id_team_id_unique');
     }
 };

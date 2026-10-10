@@ -6,6 +6,7 @@ use App\Mcp\Tools\SavePrompt;
 use App\Models\User;
 use App\Team\Infrastructure\Persistence\ProjectRecord;
 use App\Team\Infrastructure\Persistence\TeamRecord;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 
@@ -125,4 +126,61 @@ test('the team indexes exist and are valid', function () {
         ->whereIn('pg_class.relname', $expected)->where('indisvalid', true)->pluck('relname')->all();
 
     expect($valid)->toEqualCanonicalizing($expected);
+});
+
+function promptRow(int $userId, array $extra = []): array
+{
+    return $extra + ['user_id' => $userId, 'session_id' => 's', 'content' => 'c', 'created_at' => now(), 'updated_at' => now()];
+}
+
+test('an observation cannot pair a team with a project of another team', function () {
+    $user = User::factory()->create();
+    $teamA = TeamRecord::factory()->create();
+    $projectOfB = ProjectRecord::factory()->create();
+
+    expect(fn () => DB::table('observations')->insert(observationRow($user->id, ['team_id' => $teamA->id, 'project_id' => $projectOfB->id])))
+        ->toThrow(QueryException::class);
+});
+
+test('a prompt cannot pair a team with a project of another team', function () {
+    $user = User::factory()->create();
+    $teamA = TeamRecord::factory()->create();
+    $projectOfB = ProjectRecord::factory()->create();
+
+    expect(fn () => DB::table('user_prompts')->insert(promptRow($user->id, ['team_id' => $teamA->id, 'project_id' => $projectOfB->id])))
+        ->toThrow(QueryException::class);
+});
+
+test('rows accept a project of their own team, or no project', function () {
+    $user = User::factory()->create();
+    $project = ProjectRecord::factory()->create();
+
+    DB::table('observations')->insert(observationRow($user->id, ['team_id' => $project->team_id, 'project_id' => $project->id]));
+    DB::table('observations')->insert(observationRow($user->id, ['team_id' => $project->team_id]));
+    DB::table('user_prompts')->insert(promptRow($user->id, ['team_id' => $project->team_id, 'project_id' => $project->id]));
+    DB::table('user_prompts')->insert(promptRow($user->id, ['project_id' => $project->id]));
+
+    expect(DB::table('observations')->count())->toBe(2)
+        ->and(DB::table('user_prompts')->count())->toBe(2);
+});
+
+test('the composite team-project foreign keys are added NOT VALID', function () {
+    foreach (['observations', 'user_prompts'] as $table) {
+        $validated = DB::selectOne('select convalidated from pg_constraint where conname = ?', ["{$table}_project_team_foreign"]);
+        expect($validated?->convalidated)->toBeFalse($table);
+    }
+});
+
+test('deleting a project nulls project_id even when the rows carry its team', function () {
+    $user = User::factory()->create();
+    $project = ProjectRecord::factory()->create();
+    DB::table('observations')->insert(observationRow($user->id, ['team_id' => $project->team_id, 'project_id' => $project->id]));
+    DB::table('user_prompts')->insert(promptRow($user->id, ['team_id' => $project->team_id, 'project_id' => $project->id]));
+
+    $project->delete();
+
+    $observation = DB::table('observations')->sole();
+    $prompt = DB::table('user_prompts')->sole();
+    expect($observation->project_id)->toBeNull()->and($observation->team_id)->toBe($project->team_id)
+        ->and($prompt->project_id)->toBeNull()->and($prompt->team_id)->toBe($project->team_id);
 });
