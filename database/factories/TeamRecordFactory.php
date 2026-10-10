@@ -7,8 +7,6 @@ use App\Team\Domain\Role;
 use App\Team\Infrastructure\Persistence\TeamRecord;
 use App\Team\Infrastructure\Persistence\TeamUserRecord;
 use Illuminate\Database\Eloquent\Factories\Factory;
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Facades\DB;
 
 /**
  * @extends Factory<TeamRecord>
@@ -26,19 +24,8 @@ class TeamRecordFactory extends Factory
     }
 
     /**
-     * The team and its owner membership commit together: outside a wrapping
-     * transaction (seeders, scripts) the deferred foreign key would otherwise
-     * be checked right after the team insert. Related factories call create()
-     * on this factory, so they get the same guarantee.
-     */
-    public function create($attributes = [], ?Model $parent = null)
-    {
-        return DB::transaction(fn () => parent::create($attributes, $parent));
-    }
-
-    /**
      * A team always has its owner membership: the owner row must be exactly
-     * teams.owner_id (enforced by deferred foreign keys).
+     * teams.owner_id (enforced by a foreign key).
      */
     public function configure(): static
     {
