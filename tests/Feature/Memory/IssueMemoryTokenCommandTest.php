@@ -83,6 +83,16 @@ test('it prints the same Token line for a user created with --create', function 
 });
 
 test('it prints exactly the failure line and exits 1 for an unknown email when not confirmed', function () {
+    // Non-interactive: the confirmation resolves to its default (no), so the complete output can be captured.
+    $exit = Artisan::call('memory:token', ['email' => 'ghost@example.com', '--no-interaction' => true]);
+
+    expect($exit)->toBe(1)
+        ->and(Artisan::output())->toBe("No token issued.\n")
+        ->and(User::count())->toBe(0);
+});
+
+test('it asks for confirmation before creating an unknown user and exits 1 when declined', function () {
+    // PendingCommand cannot assert complete output, only the interaction; exact output is pinned by the test above.
     $this->artisan('memory:token', ['email' => 'ghost@example.com'])
         ->expectsConfirmation('User ghost@example.com does not exist. Create it?', 'no')
         ->expectsOutput('No token issued.')

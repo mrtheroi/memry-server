@@ -2,6 +2,7 @@
 
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Artisan;
 
 uses(RefreshDatabase::class);
 
@@ -50,9 +51,10 @@ test('it prints exactly the revoked count and exits 0, also for a user without t
         $user->createToken("t{$i}");
     }
 
-    $this->artisan('memory:revoke', ['email' => 'me@example.com'])
-        ->expectsOutput($line)
-        ->assertExitCode(0);
+    $exit = Artisan::call('memory:revoke', ['email' => 'me@example.com']);
+
+    expect($exit)->toBe(0)
+        ->and(Artisan::output())->toBe($line."\n");
 })->with([
     'none' => [0, 'Revoked 0 tokens.'],
     'one' => [1, 'Revoked 1 tokens.'],
@@ -60,7 +62,8 @@ test('it prints exactly the revoked count and exits 0, also for a user without t
 ]);
 
 test('it prints exactly the not-found line and exits 1', function () {
-    $this->artisan('memory:revoke', ['email' => ' Ghost@Example.COM '])
-        ->expectsOutput('User ghost@example.com not found.')
-        ->assertExitCode(1);
+    $exit = Artisan::call('memory:revoke', ['email' => ' Ghost@Example.COM ']);
+
+    expect($exit)->toBe(1)
+        ->and(Artisan::output())->toBe("User ghost@example.com not found.\n");
 });
