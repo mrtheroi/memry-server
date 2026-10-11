@@ -46,3 +46,14 @@ test('a name that normalization expands past 255 characters is stored', function
     expect(mb_strlen($name))->toBeGreaterThan(255)
         ->and(ProjectRecord::find($id)->name)->toBe($name);
 });
+
+test('rolling back the text widening keeps a name longer than 255 characters intact', function () {
+    $teamId = personalTeamOf(User::factory()->create());
+    $name = ProjectName::normalize(str_repeat('İ', 255));
+    $id = app(ProjectRepository::class)->getOrCreateId($teamId, $name);
+    $migration = require collect(glob(database_path('migrations/*_change_projects_name_to_text.php')))->sole();
+
+    $migration->down();
+
+    expect(ProjectRecord::find($id)->name)->toBe($name);
+});

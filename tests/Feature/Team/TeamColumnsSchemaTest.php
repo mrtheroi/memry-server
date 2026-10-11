@@ -22,6 +22,7 @@ const TEAM_FKS = [
 const TEAM_INDEX_MIGRATIONS = [
     'add_team_indexes_to_observations_table',
     'add_team_indexes_to_user_prompts_and_tokens',
+    'add_user_id_indexes_to_observations_and_user_prompts',
 ];
 
 function teamIndexMigration(string $name): object
@@ -120,6 +121,7 @@ test('the team indexes exist and are valid', function () {
         'observations_team_project_updated_idx', 'observations_team_topic_key_idx',
         'observations_project_id_idx', 'observations_created_by_idx', 'observations_updated_by_idx',
         'user_prompts_team_project_idx', 'user_prompts_project_id_idx', 'personal_access_tokens_team_id_idx',
+        'observations_user_id_id_idx', 'user_prompts_user_id_id_idx',
     ];
 
     $valid = DB::table('pg_index')->join('pg_class', 'pg_class.oid', '=', 'pg_index.indexrelid')

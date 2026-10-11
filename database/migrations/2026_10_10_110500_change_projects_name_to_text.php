@@ -16,6 +16,8 @@ return new class extends Migration
 
     public function down(): void
     {
-        DB::statement('ALTER TABLE projects ALTER COLUMN name TYPE varchar(255)');
+        // Intentionally a no-op: keeping text is safe, while narrowing to
+        // varchar(255) would fail (or lose data) once a longer normalized name
+        // exists. Rolling back create_projects_table drops the table anyway.
     }
 };
