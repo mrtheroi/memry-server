@@ -48,9 +48,9 @@ class TokenController extends Controller
                 ])->save();
             }
 
-            $provisionPersonalTeam->forUser($user->id);
+            $teamId = $provisionPersonalTeam->forUser($user->id);
 
-            return $user->createToken('memry-cli')->plainTextToken;
+            return $user->createTeamToken('memry-cli', $teamId)->plainTextToken;
         });
 
         return response()->json(['token' => $token]);

@@ -50,7 +50,7 @@ test('logging in again keeps a single personal team', function () {
 });
 
 test('an existing user without a team gets one on the next login', function () {
-    $user = User::factory()->create(['email' => 'ada@example.com']);
+    $user = User::factory()->withoutPersonalTeam()->create(['email' => 'ada@example.com']);
     expect(TeamRecord::count())->toBe(0);
 
     loginWithCode('ada@example.com')->assertOk();
@@ -78,7 +78,7 @@ test('memory:token --create provisions a personal team for a new user', function
 });
 
 test('memory:token provisions a personal team for an existing user', function () {
-    $user = User::factory()->create(['email' => 'me@example.com']);
+    $user = User::factory()->withoutPersonalTeam()->create(['email' => 'me@example.com']);
 
     $this->artisan('memory:token', ['email' => 'me@example.com'])->assertSuccessful();
 
@@ -100,4 +100,18 @@ test('deleting the account removes the personal team and its membership', functi
     $this->withToken($response->json('token'))->deleteJson('/api/account', ['email' => 'ada@example.com'])->assertSuccessful();
 
     expect(User::count())->toBe(0)->and(TeamRecord::count())->toBe(0)->and(TeamUserRecord::count())->toBe(0);
+});
+
+test('a token from POST /api/auth/token is bound to the personal team', function () {
+    $response = loginWithCode('ada@example.com');
+
+    $response->assertOk()->assertExactJson(['token' => $response->json('token')]);
+    expect($response->json('token'))->toMatch('/\A\d+\|[A-Za-z0-9]{48}\z/')
+        ->and(User::sole()->tokens()->sole()->team_id)->toBe(TeamRecord::sole()->id);
+});
+
+test('memory:token issues a token bound to the personal team', function () {
+    Artisan::call('memory:token', ['email' => 'new@example.com', '--create' => true]);
+
+    expect(User::sole()->tokens()->sole()->team_id)->toBe(TeamRecord::sole()->id);
 });
