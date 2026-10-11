@@ -5,13 +5,15 @@ namespace App\Http\Controllers\Auth;
 use App\Http\Controllers\Controller;
 use App\Models\LoginCode;
 use App\Models\User;
+use App\Team\Application\ProvisionPersonalTeam;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class TokenController extends Controller
 {
-    public function __invoke(Request $request): JsonResponse
+    public function __invoke(Request $request, ProvisionPersonalTeam $provisionPersonalTeam): JsonResponse
     {
         $request->validate([
             'email' => ['required', 'string', 'email', 'max:255'],
@@ -35,17 +37,23 @@ class TokenController extends Controller
             return $this->invalidCode();
         }
 
-        $user = User::firstOrNew(['email' => $email]);
+        $token = DB::transaction(function () use ($email, $provisionPersonalTeam) {
+            $user = User::firstOrNew(['email' => $email]);
 
-        if (! $user->exists) {
-            $user->forceFill([
-                'name' => Str::before($email, '@'),
-                'password' => Str::random(40),
-                'email_verified_at' => now(),
-            ])->save();
-        }
+            if (! $user->exists) {
+                $user->forceFill([
+                    'name' => Str::before($email, '@'),
+                    'password' => Str::random(40),
+                    'email_verified_at' => now(),
+                ])->save();
+            }
 
-        return response()->json(['token' => $user->createToken('memry-cli')->plainTextToken]);
+            $provisionPersonalTeam->forUser($user->id);
+
+            return $user->createToken('memry-cli')->plainTextToken;
+        });
+
+        return response()->json(['token' => $token]);
     }
 
     private function invalidCode(): JsonResponse
