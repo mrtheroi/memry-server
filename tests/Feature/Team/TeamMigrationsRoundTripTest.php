@@ -13,6 +13,8 @@ test('the team migrations and their dependents roll back and re-apply cleanly', 
     // By file, not by --step: later migrations must not shift what this rolls
     // back. Add a migration here when a later one depends on these tables.
     $migrations = collect([
+        'add_user_id_indexes_to_observations_and_user_prompts',
+        'change_projects_name_to_text',
         'add_team_indexes_to_user_prompts_and_tokens',
         'add_team_indexes_to_observations_table',
         'add_team_id_to_personal_access_tokens_table',
