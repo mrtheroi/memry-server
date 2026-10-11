@@ -18,7 +18,7 @@ class TeamRecordFactory extends Factory
     public function definition(): array
     {
         return [
-            'owner_id' => User::factory(),
+            'owner_id' => User::factory()->withoutPersonalTeam(),
             'slug' => bin2hex(random_bytes(8)),
         ];
     }

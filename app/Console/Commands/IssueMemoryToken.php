@@ -36,9 +36,9 @@ class IssueMemoryToken extends Command
                 'password' => Str::random(40),
             ]);
 
-            $provisionPersonalTeam->forUser($user->id);
+            $teamId = $provisionPersonalTeam->forUser($user->id);
 
-            return $user->createToken('mcp')->plainTextToken;
+            return $user->createTeamToken('mcp', $teamId)->plainTextToken;
         });
 
         $this->line("Token: {$token}");

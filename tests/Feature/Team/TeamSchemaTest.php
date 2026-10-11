@@ -27,7 +27,7 @@ test('a team slug is unique', function () {
 });
 
 test('an owner can have only one personal team but many shared teams', function () {
-    $owner = User::factory()->create();
+    $owner = User::factory()->withoutPersonalTeam()->create();
     TeamRecord::factory()->create(['owner_id' => $owner->id, 'personal_team' => true]);
     TeamRecord::factory()->count(2)->create(['owner_id' => $owner->id]);
 

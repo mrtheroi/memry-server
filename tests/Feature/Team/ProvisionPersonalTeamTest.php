@@ -12,7 +12,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 uses(RefreshDatabase::class);
 
 test('it provisions a personal team with its owner membership', function () {
-    $user = User::factory()->create();
+    $user = User::factory()->withoutPersonalTeam()->create();
 
     $teamId = app(ProvisionPersonalTeam::class)->forUser($user->id);
 
@@ -29,7 +29,7 @@ test('it provisions a personal team with its owner membership', function () {
 });
 
 test('it is idempotent and returns the same team id', function () {
-    $user = User::factory()->create();
+    $user = User::factory()->withoutPersonalTeam()->create();
     $provision = app(ProvisionPersonalTeam::class);
 
     $first = $provision->forUser($user->id);
@@ -55,7 +55,7 @@ function fakeSlugs(string ...$slugs): void
 
 test('it retries with a new slug when the slug is already taken', function () {
     TeamRecord::factory()->create(['slug' => 'taken']);
-    $user = User::factory()->create();
+    $user = User::factory()->withoutPersonalTeam()->create();
     fakeSlugs('taken', 'fresh');
 
     $teamId = app(ProvisionPersonalTeam::class)->forUser($user->id);
@@ -66,7 +66,7 @@ test('it retries with a new slug when the slug is already taken', function () {
 
 test('it gives up with a domain exception after five slug collisions', function () {
     TeamRecord::factory()->create(['slug' => 'taken']);
-    $user = User::factory()->create();
+    $user = User::factory()->withoutPersonalTeam()->create();
     fakeSlugs(...array_fill(0, 5, 'taken'), ...['never-used']);
 
     expect(fn () => app(ProvisionPersonalTeam::class)->forUser($user->id))
@@ -74,7 +74,7 @@ test('it gives up with a domain exception after five slug collisions', function 
 });
 
 test('it heals a personal team that has no owner membership', function () {
-    $user = User::factory()->create();
+    $user = User::factory()->withoutPersonalTeam()->create();
     $team = TeamRecord::factory()->create(['owner_id' => $user->id, 'personal_team' => true]);
     TeamUserRecord::query()->delete();
 
@@ -86,7 +86,7 @@ test('it heals a personal team that has no owner membership', function () {
 });
 
 test('it promotes the owner to the owner role when their personal team membership has another role', function (string $role) {
-    $user = User::factory()->create();
+    $user = User::factory()->withoutPersonalTeam()->create();
     $team = TeamRecord::factory()->create(['owner_id' => $user->id, 'personal_team' => true]);
     TeamUserRecord::query()->update(['role' => $role]);
 
@@ -97,7 +97,7 @@ test('it promotes the owner to the owner role when their personal team membershi
 })->with(['member', 'admin']);
 
 test('it generates opaque 16 hex char slugs unrelated to the user identity', function () {
-    $user = User::factory()->create(['email' => 'jane.doe@example.com', 'name' => 'Jane Doe']);
+    $user = User::factory()->withoutPersonalTeam()->create(['email' => 'jane.doe@example.com', 'name' => 'Jane Doe']);
 
     $teamId = app(ProvisionPersonalTeam::class)->forUser($user->id);
 
