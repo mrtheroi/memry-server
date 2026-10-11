@@ -7,10 +7,10 @@ use App\Memory\Domain\ProjectRepository;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Idempotent and resumable: rows with a NULL team_id get their team, each chunk
- * commits as a whole, and user_id / updated_at are never written. Rows that
- * already have a team but whose legacy `project` changed since (dual-write
- * does not exist yet) get their project_id reconciled.
+ * Run once after dual-write (task 6) is deployed; re-running is safe; it only
+ * fills rows that still have no team. Resumable: each chunk commits as a whole,
+ * every UPDATE is guarded with `team_id IS NULL` so a row written by newer code
+ * is never overwritten, and user_id / updated_at are never written.
  */
 class BackfillTeams
 {
@@ -22,26 +22,22 @@ class BackfillTeams
     ) {}
 
     /**
-     * @return array{teams: int, observations: int, user_prompts: int, tokens: int, observations_reconciled: int, user_prompts_reconciled: int}
+     * @return array{teams: int, observations: int, user_prompts: int, tokens: int}
      */
     public function run(int $chunk, ?int $maxChunks = null): array
     {
-        $teams = $this->provisionTeams();
-
         return [
-            'teams' => count($teams),
-            'observations' => $this->backfillRows('observations', $teams, $chunk, $maxChunks, true),
-            'user_prompts' => $this->backfillRows('user_prompts', $teams, $chunk, $maxChunks, false),
-            'tokens' => $this->backfillTokens($teams, $chunk, $maxChunks),
-            'observations_reconciled' => $this->reconcileProjects('observations', $chunk, $maxChunks),
-            'user_prompts_reconciled' => $this->reconcileProjects('user_prompts', $chunk, $maxChunks),
+            'teams' => $this->provisionTeams($chunk),
+            'observations' => $this->backfillRows('observations', $chunk, $maxChunks, true),
+            'user_prompts' => $this->backfillRows('user_prompts', $chunk, $maxChunks, false),
+            'tokens' => $this->backfillTokens($chunk, $maxChunks),
         ];
     }
 
     /**
      * Read-only: what is still missing.
      *
-     * @return array{observations: int, user_prompts: int, tokens: int, teams_without_owner: int, users_without_personal_team: int, observations_stale_project: int, user_prompts_stale_project: int}
+     * @return array{observations: int, user_prompts: int, tokens: int, teams_without_owner: int, users_without_personal_team: int}
      */
     public function check(): array
     {
@@ -57,41 +53,29 @@ class BackfillTeams
                     ->whereExists(fn ($m) => $m->from('team_user')->whereColumn('team_user.team_id', 'teams.id')
                         ->whereColumn('team_user.user_id', 'users.id')->where('team_user.role', 'owner'))
             )->count(),
-            'observations_stale_project' => $this->staleProjects('observations'),
-            'user_prompts_stale_project' => $this->staleProjects('user_prompts'),
         ];
     }
 
-    /**
-     * Same normalization as ProjectName::normalize() and projects_name_canonical_check.
-     */
-    public const SQL_NORMALIZED = "NULLIF(regexp_replace(regexp_replace(lower(btrim(t.project, E' \\t\\n\\r\\x0B')), '-{2,}', '-', 'g'), '_{2,}', '_', 'g'), '')";
-
-    private function staleProjects(string $table): int
+    private function provisionTeams(int $chunk): int
     {
-        return (int) DB::selectOne(
-            "SELECT count(*) AS n FROM {$table} t LEFT JOIN projects p ON p.id = t.project_id
-             WHERE t.team_id IS NOT NULL AND p.name IS DISTINCT FROM ".self::SQL_NORMALIZED
-        )->n;
-    }
+        $count = 0;
+        $lastId = 0;
 
-    /**
-     * @return array<int, int> user id => personal team id
-     */
-    private function provisionTeams(): array
-    {
-        $teams = [];
-        foreach (DB::table('users')->orderBy('id')->pluck('id') as $userId) {
-            $teams[$userId] = DB::transaction(fn () => $this->provisionPersonalTeam->forUser($userId));
+        while (($userIds = DB::table('users')->where('id', '>', $lastId)->orderBy('id')->limit($chunk)->pluck('id'))->isNotEmpty()) {
+            DB::transaction(function () use ($userIds) {
+                foreach ($userIds as $userId) {
+                    $this->provisionPersonalTeam->forUser($userId);
+                }
+            });
+
+            $count += $userIds->count();
+            $lastId = $userIds->last();
         }
 
-        return $teams;
+        return $count;
     }
 
-    /**
-     * @param  array<int, int>  $teams
-     */
-    private function backfillTokens(array &$teams, int $chunk, ?int $maxChunks): int
+    private function backfillTokens(int $chunk, ?int $maxChunks): int
     {
         $updated = 0;
         $lastId = 0;
@@ -105,60 +89,25 @@ class BackfillTeams
                 break;
             }
 
-            DB::transaction(function () use ($tokens, &$teams) {
+            $updated += DB::transaction(function () use ($tokens) {
+                $teams = [];
+                $affected = 0;
                 foreach ($tokens->groupBy('tokenable_id') as $userId => $group) {
                     $teamId = $teams[$userId] ??= $this->provisionPersonalTeam->forUser($userId);
-                    DB::table('personal_access_tokens')->whereIn('id', $group->pluck('id'))->update(['team_id' => $teamId]);
+                    $affected += DB::table('personal_access_tokens')->whereIn('id', $group->pluck('id'))
+                        ->whereNull('team_id')->update(['team_id' => $teamId]);
                 }
+
+                return $affected;
             });
 
-            $updated += $tokens->count();
             $lastId = $tokens->last()->id;
         }
 
         return $updated;
     }
 
-    /**
-     * Fixes project_id on rows that already have a team but whose project
-     * changed afterwards. Only project_id is written.
-     */
-    private function reconcileProjects(string $table, int $chunk, ?int $maxChunks): int
-    {
-        $fixed = 0;
-        $lastId = 0;
-
-        for ($done = 0; $maxChunks === null || $done < $maxChunks; $done++) {
-            $rows = DB::table($table.' as t')->leftJoin('projects as p', 'p.id', '=', 't.project_id')
-                ->whereNotNull('t.team_id')->where('t.id', '>', $lastId)
-                ->orderBy('t.id')->limit($chunk)->get(['t.id', 't.team_id', 't.project', 't.project_id', 'p.name as current_name']);
-
-            if ($rows->isEmpty()) {
-                break;
-            }
-
-            DB::transaction(function () use ($table, $rows, &$fixed) {
-                foreach ($rows as $row) {
-                    $name = ProjectName::normalize($row->project);
-                    if ($name === $row->current_name) {
-                        continue;
-                    }
-                    DB::table($table)->where('id', $row->id)
-                        ->update(['project_id' => $name === null ? null : $this->projects->getOrCreateId($row->team_id, $name)]);
-                    $fixed++;
-                }
-            });
-
-            $lastId = $rows->last()->id;
-        }
-
-        return $fixed;
-    }
-
-    /**
-     * @param  array<int, int>  $teams
-     */
-    private function backfillRows(string $table, array &$teams, int $chunk, ?int $maxChunks, bool $audit): int
+    private function backfillRows(string $table, int $chunk, ?int $maxChunks, bool $audit): int
     {
         $updated = 0;
         $lastId = 0;
@@ -171,7 +120,9 @@ class BackfillTeams
                 break;
             }
 
-            DB::transaction(function () use ($table, $rows, &$teams, $audit) {
+            $updated += DB::transaction(function () use ($table, $rows, $audit) {
+                $teams = [];
+                $affected = 0;
                 foreach ($rows->groupBy(fn ($row) => $row->user_id.'|'.ProjectName::normalize($row->project)) as $group) {
                     $userId = $group->first()->user_id;
                     $name = ProjectName::normalize($group->first()->project);
@@ -181,11 +132,12 @@ class BackfillTeams
                     if ($audit) {
                         $values += ['created_by' => $userId, 'updated_by' => $userId];
                     }
-                    DB::table($table)->whereIn('id', $group->pluck('id'))->update($values);
+                    $affected += DB::table($table)->whereIn('id', $group->pluck('id'))->whereNull('team_id')->update($values);
                 }
+
+                return $affected;
             });
 
-            $updated += $rows->count();
             $lastId = $rows->last()->id;
         }
 

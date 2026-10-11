@@ -8,7 +8,7 @@ use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
 
 #[Signature('memory:backfill-teams {--chunk=500 : Rows per transaction} {--check : Report what is missing without changing anything}')]
-#[Description('Assign personal teams, projects and authorship to rows created before teams existed')]
+#[Description('Assign personal teams, projects and authorship to rows created before teams existed. Run once after dual-write (task 6) is deployed; re-running is safe; it only fills rows that still have no team.')]
 class BackfillMemoryTeams extends Command
 {
     public function handle(BackfillTeams $backfill): int
@@ -35,8 +35,6 @@ class BackfillMemoryTeams extends Command
         }
         $this->line("teams without owner: {$missing['teams_without_owner']}");
         $this->line("users without personal team: {$missing['users_without_personal_team']}");
-        $this->line("observations with stale project: {$missing['observations_stale_project']}");
-        $this->line("user_prompts with stale project: {$missing['user_prompts_stale_project']}");
 
         return array_sum($missing) > 0 ? self::FAILURE : self::SUCCESS;
     }
