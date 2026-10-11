@@ -44,7 +44,9 @@ class BackfillTeams
         return [
             'observations' => DB::table('observations')->whereNull('team_id')->count(),
             'user_prompts' => DB::table('user_prompts')->whereNull('team_id')->count(),
-            'tokens' => DB::table('personal_access_tokens')->where('tokenable_type', self::USER_TOKEN)->whereNull('team_id')->count(),
+            // A token whose user is gone cannot authenticate, so it needs no team.
+            'tokens' => DB::table('personal_access_tokens')->where('tokenable_type', self::USER_TOKEN)->whereNull('team_id')
+                ->whereExists(fn ($q) => $q->from('users')->whereColumn('users.id', 'personal_access_tokens.tokenable_id'))->count(),
             'teams_without_owner' => DB::table('teams')->whereNotExists(
                 fn ($q) => $q->from('team_user')->whereColumn('team_user.team_id', 'teams.id')->where('team_user.role', 'owner')
             )->count(),
@@ -64,7 +66,7 @@ class BackfillTeams
         while (($userIds = DB::table('users')->where('id', '>', $lastId)->orderBy('id')->limit($chunk)->pluck('id'))->isNotEmpty()) {
             DB::transaction(function () use ($userIds) {
                 foreach ($userIds as $userId) {
-                    $this->provisionPersonalTeam->forUser($userId);
+                    $this->teamFor($userId);
                 }
             });
 
@@ -93,7 +95,10 @@ class BackfillTeams
                 $teams = [];
                 $affected = 0;
                 foreach ($tokens->groupBy('tokenable_id') as $userId => $group) {
-                    $teamId = $teams[$userId] ??= $this->provisionPersonalTeam->forUser($userId);
+                    $teamId = $teams[$userId] ??= $this->teamFor($userId);
+                    if ($teamId === null) {
+                        continue;
+                    }
                     $affected += DB::table('personal_access_tokens')->whereIn('id', $group->pluck('id'))
                         ->whereNull('team_id')->update(['team_id' => $teamId]);
                 }
@@ -127,7 +132,10 @@ class BackfillTeams
                     $userId = $group->first()->user_id;
                     $name = ProjectName::normalize($group->first()->project);
                     // A user who signed up after the teams were provisioned gets theirs now.
-                    $teamId = $teams[$userId] ??= $this->provisionPersonalTeam->forUser($userId);
+                    $teamId = $teams[$userId] ??= $this->teamFor($userId);
+                    if ($teamId === null) {
+                        continue;
+                    }
                     $values = ['team_id' => $teamId, 'project_id' => $name === null ? null : $this->projects->getOrCreateId($teamId, $name)];
                     if ($audit) {
                         $values += ['created_by' => $userId, 'updated_by' => $userId];
@@ -142,5 +150,19 @@ class BackfillTeams
         }
 
         return $updated;
+    }
+
+    /**
+     * The user's personal team, or null when the user no longer exists. FOR SHARE
+     * makes a concurrent account deletion wait for this transaction instead of
+     * removing the user between the read and the team insert.
+     */
+    private function teamFor(int $userId): ?int
+    {
+        if (! DB::table('users')->where('id', $userId)->sharedLock()->exists()) {
+            return null;
+        }
+
+        return $this->provisionPersonalTeam->forUser($userId);
     }
 }

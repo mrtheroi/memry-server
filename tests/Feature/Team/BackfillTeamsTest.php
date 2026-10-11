@@ -334,7 +334,8 @@ test('users are provisioned in keyset chunks and every user gets a personal team
     legacyObservation(User::first(), 'alpha');
     $unbounded = 0;
     DB::listen(function ($query) use (&$unbounded) {
-        if (preg_match('/^select .* from "users"/i', $query->sql) && ! str_contains($query->sql, 'limit')) {
+        // Bounded: a keyset chunk (limit) or one user by primary key (the lock).
+        if (preg_match('/^select .* from "users"/i', $query->sql) && ! str_contains($query->sql, 'limit') && ! str_contains($query->sql, '"id" = ?')) {
             $unbounded++;
         }
     });
@@ -345,4 +346,21 @@ test('users are provisioned in keyset chunks and every user gets a personal team
         ->and($result['teams'])->toBe(3)
         ->and(DB::table('teams')->where('personal_team', true)->count())->toBe(3);
     $this->artisan('memory:backfill-teams', ['--check' => true])->assertSuccessful();
+});
+
+test('a user deleted before their team is provisioned is skipped, with their orphan tokens', function () {
+    $gone = User::factory()->create();
+    $goneId = $gone->id;
+    $gone->delete();
+    // tokenable_id has no foreign key, so a token can outlive its user: the
+    // same state as an account deleted mid-run.
+    DB::table('personal_access_tokens')->insert([
+        'tokenable_type' => User::class, 'tokenable_id' => $goneId, 'name' => 'memry-cli',
+        'token' => hash('sha256', 'orphan'), 'abilities' => '["*"]', 'created_at' => now(), 'updated_at' => now(),
+    ]);
+
+    app(BackfillTeams::class)->run(500);
+
+    expect(DB::table('teams')->where('owner_id', $goneId)->exists())->toBeFalse();
+    $this->artisan('memory:backfill-teams', ['--check' => true])->assertExitCode(0);
 });
