@@ -6,8 +6,10 @@ use App\Models\User;
 use App\Team\Application\BackfillTeams;
 use App\Team\Application\ProvisionPersonalTeam;
 use App\Team\Domain\TeamSlugs;
+use Illuminate\Database\Events\TransactionBeginning;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 
 uses(RefreshDatabase::class);
 
@@ -143,7 +145,7 @@ test('a multi-chunk run equals a single pass', function () {
 test('resuming after the first chunk equals an uninterrupted run', function () {
     seedLegacy();
     app(BackfillTeams::class)->run(1, 1);
-    expect(DB::table('observations')->whereNull('team_id')->count())->toBe(7);
+    expect(DB::table('observations')->whereNull('team_id')->count())->toBe(4);
     $this->artisan('memory:backfill-teams', ['--chunk' => 3])->assertSuccessful();
     $resumed = backfillSnapshot();
     expect(DB::table('observations')->whereNull('team_id')->count())->toBe(0);
@@ -224,8 +226,8 @@ test('a user who signs up while the backfill runs gets a team for their rows', f
     $early = User::factory()->create();
     legacyObservation($early, 'alpha');
 
-    // Provisioning the existing users is the moment a new signup can slip in:
-    // the user list is already taken, but their legacy row lands before the chunks.
+    // A signup during the first user's transaction is not in the user chunk
+    // already read; the next keyset chunk (id > last) picks them up.
     app()->bind(ProvisionPersonalTeam::class, fn ($app) => new class($app->make(TeamSlugs::class)) extends ProvisionPersonalTeam
     {
         private bool $signedUp = false;
@@ -265,16 +267,20 @@ test('check reports a user without a personal team or owner membership', functio
         ->assertFailed();
 });
 
-test('tokens are backfilled in whole chunks and still authenticate', function () {
+test('a user\'s tokens are backfilled in sub-chunks, each transaction locking the user first, and still authenticate', function () {
     $user = User::factory()->create();
     $plain = array_map(fn ($n) => $user->createToken($n)->plainTextToken, ['a', 'b', 'c']);
 
+    $locks = 0;
+    DB::listen(function ($query) use (&$locks) {
+        $locks += str_contains(strtolower($query->sql), 'from "users" where "id" = ? for share') ? 1 : 0;
+    });
+
+    // maxChunks bounds user chunks: this one user is finished, 1 token per transaction.
     app(BackfillTeams::class)->run(1, 1);
-    expect(DB::table('personal_access_tokens')->whereNotNull('team_id')->count())->toBe(1);
 
-    $this->artisan('memory:backfill-teams', ['--chunk' => 1])->assertSuccessful();
-
-    expect(DB::table('personal_access_tokens')->whereNull('team_id')->count())->toBe(0);
+    expect(DB::table('personal_access_tokens')->whereNull('team_id')->count())->toBe(0)
+        ->and($locks)->toBeGreaterThanOrEqual(3);
     foreach ($plain as $token) {
         $this->app['auth']->forgetGuards();
         $this->withToken($token)->get('/api/context?project=dbmcp')->assertOk();
@@ -363,4 +369,36 @@ test('a user deleted before their team is provisioned is skipped, with their orp
 
     expect(DB::table('teams')->where('owner_id', $goneId)->exists())->toBeFalse();
     $this->artisan('memory:backfill-teams', ['--check' => true])->assertExitCode(0);
+});
+
+test('each user is backfilled in one transaction that locks the user row first', function () {
+    $user = User::factory()->create();
+    legacyObservation($user, 'alpha');
+    legacyPrompt($user, 'alpha');
+    $user->createToken('legacy');
+    $base = DB::transactionLevel();
+    $transactions = [];
+    Event::listen(TransactionBeginning::class, function () use ($base, &$transactions) {
+        if (DB::transactionLevel() === $base + 1) {
+            $transactions[] = [];
+        }
+    });
+    DB::listen(function ($query) use ($base, &$transactions) {
+        if (DB::transactionLevel() > $base) {
+            $transactions[count($transactions) - 1][] = strtolower($query->sql);
+        }
+    });
+
+    app(BackfillTeams::class)->run(500);
+
+    $touches = fn (array $statements, string $needle) => collect($statements)->search(fn ($s) => str_contains($s, $needle));
+    $complete = collect($transactions)->filter(fn ($s) => $touches($s, 'update "personal_access_tokens"') !== false);
+    expect($complete)->toHaveCount(1);
+    $statements = $complete->first();
+    $lock = $touches($statements, 'from "users"');
+    expect($statements[$lock])->toContain('for share')
+        ->and($lock)->toBe(0);
+    foreach (['insert into teams ', 'update "personal_access_tokens"', 'update "observations"', 'update "user_prompts"'] as $write) {
+        expect($touches($statements, $write))->toBeGreaterThan($lock);
+    }
 });

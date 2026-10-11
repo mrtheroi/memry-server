@@ -8,9 +8,10 @@ use Illuminate\Support\Facades\DB;
 
 /**
  * Run once after dual-write (task 6) is deployed; re-running is safe; it only
- * fills rows that still have no team. Resumable: each chunk commits as a whole,
- * every UPDATE is guarded with `team_id IS NULL` so a row written by newer code
- * is never overwritten, and user_id / updated_at are never written.
+ * fills rows that still have no team. Resumable: processed per user, each
+ * transaction commits as a whole (user row locked first), every UPDATE is
+ * guarded with `team_id IS NULL` so a row written by newer code is never
+ * overwritten, and user_id / updated_at are never written.
  */
 class BackfillTeams
 {
@@ -26,12 +27,26 @@ class BackfillTeams
      */
     public function run(int $chunk, ?int $maxChunks = null): array
     {
-        return [
-            'teams' => $this->provisionTeams($chunk),
-            'observations' => $this->backfillRows('observations', $chunk, $maxChunks, true),
-            'user_prompts' => $this->backfillRows('user_prompts', $chunk, $maxChunks, false),
-            'tokens' => $this->backfillTokens($chunk, $maxChunks),
-        ];
+        $total = ['teams' => 0, 'observations' => 0, 'user_prompts' => 0, 'tokens' => 0];
+        $lastId = 0;
+
+        for ($done = 0; $maxChunks === null || $done < $maxChunks; $done++) {
+            $userIds = DB::table('users')->where('id', '>', $lastId)->orderBy('id')->limit($chunk)->pluck('id');
+
+            if ($userIds->isEmpty()) {
+                break;
+            }
+
+            foreach ($userIds as $userId) {
+                foreach ($this->backfillUser($userId, $chunk) ?? [] as $what => $count) {
+                    $total[$what] += $count;
+                }
+            }
+
+            $lastId = $userIds->last();
+        }
+
+        return $total;
     }
 
     /**
@@ -58,111 +73,79 @@ class BackfillTeams
         ];
     }
 
-    private function provisionTeams(int $chunk): int
+    /**
+     * One user, in transactions of at most $chunk rows per table. Lock order: the
+     * user row first (FOR SHARE: account deletion takes it FOR UPDATE and also
+     * starts at the user row, so the two cannot deadlock, while concurrent
+     * readers are not blocked), then the user's other rows. Null when the user
+     * no longer exists.
+     *
+     * @return array{teams: int, observations: int, user_prompts: int, tokens: int}|null
+     */
+    private function backfillUser(int $userId, int $chunk): ?array
     {
-        $count = 0;
-        $lastId = 0;
+        $result = ['teams' => 1, 'observations' => 0, 'user_prompts' => 0, 'tokens' => 0];
 
-        while (($userIds = DB::table('users')->where('id', '>', $lastId)->orderBy('id')->limit($chunk)->pluck('id'))->isNotEmpty()) {
-            DB::transaction(function () use ($userIds) {
-                foreach ($userIds as $userId) {
-                    $this->teamFor($userId);
+        do {
+            $step = DB::transaction(function () use ($userId, $chunk) {
+                if (! DB::table('users')->where('id', $userId)->sharedLock()->exists()) {
+                    return null;
                 }
+
+                $teamId = $this->provisionPersonalTeam->forUser($userId);
+
+                return [
+                    'tokens' => $this->backfillTokens($userId, $teamId, $chunk),
+                    'observations' => $this->backfillRows('observations', $userId, $teamId, $chunk, true),
+                    'user_prompts' => $this->backfillRows('user_prompts', $userId, $teamId, $chunk, false),
+                ];
             });
 
-            $count += $userIds->count();
-            $lastId = $userIds->last();
-        }
-
-        return $count;
-    }
-
-    private function backfillTokens(int $chunk, ?int $maxChunks): int
-    {
-        $updated = 0;
-        $lastId = 0;
-
-        for ($done = 0; $maxChunks === null || $done < $maxChunks; $done++) {
-            $tokens = DB::table('personal_access_tokens')
-                ->where('tokenable_type', self::USER_TOKEN)->whereNull('team_id')->where('id', '>', $lastId)
-                ->orderBy('id')->limit($chunk)->get(['id', 'tokenable_id']);
-
-            if ($tokens->isEmpty()) {
-                break;
+            if ($step === null) {
+                return null;
             }
 
-            $updated += DB::transaction(function () use ($tokens) {
-                $teams = [];
-                $affected = 0;
-                foreach ($tokens->groupBy('tokenable_id') as $userId => $group) {
-                    $teamId = $teams[$userId] ??= $this->teamFor($userId);
-                    if ($teamId === null) {
-                        continue;
-                    }
-                    $affected += DB::table('personal_access_tokens')->whereIn('id', $group->pluck('id'))
-                        ->whereNull('team_id')->update(['team_id' => $teamId]);
-                }
-
-                return $affected;
-            });
-
-            $lastId = $tokens->last()->id;
-        }
-
-        return $updated;
-    }
-
-    private function backfillRows(string $table, int $chunk, ?int $maxChunks, bool $audit): int
-    {
-        $updated = 0;
-        $lastId = 0;
-
-        for ($done = 0; $maxChunks === null || $done < $maxChunks; $done++) {
-            $rows = DB::table($table)->whereNull('team_id')->where('id', '>', $lastId)
-                ->orderBy('id')->limit($chunk)->get(['id', 'user_id', 'project']);
-
-            if ($rows->isEmpty()) {
-                break;
+            $more = false;
+            foreach ($step as $what => [$read, $updated]) {
+                $result[$what] += $updated;
+                $more = $more || $read === $chunk;
             }
+        } while ($more);
 
-            $updated += DB::transaction(function () use ($table, $rows, $audit) {
-                $teams = [];
-                $affected = 0;
-                foreach ($rows->groupBy(fn ($row) => $row->user_id.'|'.ProjectName::normalize($row->project)) as $group) {
-                    $userId = $group->first()->user_id;
-                    $name = ProjectName::normalize($group->first()->project);
-                    // A user who signed up after the teams were provisioned gets theirs now.
-                    $teamId = $teams[$userId] ??= $this->teamFor($userId);
-                    if ($teamId === null) {
-                        continue;
-                    }
-                    $values = ['team_id' => $teamId, 'project_id' => $name === null ? null : $this->projects->getOrCreateId($teamId, $name)];
-                    if ($audit) {
-                        $values += ['created_by' => $userId, 'updated_by' => $userId];
-                    }
-                    $affected += DB::table($table)->whereIn('id', $group->pluck('id'))->whereNull('team_id')->update($values);
-                }
-
-                return $affected;
-            });
-
-            $lastId = $rows->last()->id;
-        }
-
-        return $updated;
+        return $result;
     }
 
     /**
-     * The user's personal team, or null when the user no longer exists. FOR SHARE
-     * makes a concurrent account deletion wait for this transaction instead of
-     * removing the user between the read and the team insert.
+     * @return array{int, int} rows read, rows updated
      */
-    private function teamFor(int $userId): ?int
+    private function backfillTokens(int $userId, int $teamId, int $chunk): array
     {
-        if (! DB::table('users')->where('id', $userId)->sharedLock()->exists()) {
-            return null;
+        $ids = DB::table('personal_access_tokens')
+            ->where('tokenable_type', self::USER_TOKEN)->where('tokenable_id', $userId)->whereNull('team_id')
+            ->orderBy('id')->limit($chunk)->pluck('id');
+
+        return [$ids->count(), $ids->isEmpty() ? 0 : DB::table('personal_access_tokens')
+            ->whereIn('id', $ids)->whereNull('team_id')->update(['team_id' => $teamId])];
+    }
+
+    /**
+     * @return array{int, int} rows read, rows updated
+     */
+    private function backfillRows(string $table, int $userId, int $teamId, int $chunk, bool $audit): array
+    {
+        $rows = DB::table($table)->where('user_id', $userId)->whereNull('team_id')
+            ->orderBy('id')->limit($chunk)->get(['id', 'project']);
+        $updated = 0;
+
+        foreach ($rows->groupBy(fn ($row) => ProjectName::normalize($row->project)) as $group) {
+            $name = ProjectName::normalize($group->first()->project);
+            $values = ['team_id' => $teamId, 'project_id' => $name === null ? null : $this->projects->getOrCreateId($teamId, $name)];
+            if ($audit) {
+                $values += ['created_by' => $userId, 'updated_by' => $userId];
+            }
+            $updated += DB::table($table)->whereIn('id', $group->pluck('id'))->whereNull('team_id')->update($values);
         }
 
-        return $this->provisionPersonalTeam->forUser($userId);
+        return [$rows->count(), $updated];
     }
 }

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
 use App\Models\LoginCode;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\DB;
@@ -24,6 +25,8 @@ class DeleteAccountController extends Controller
         }
 
         DB::transaction(function () use ($user) {
+            // Lock order: the user row first, then the user's other rows.
+            User::whereKey($user->id)->lockForUpdate()->first();
             LoginCode::where('email', $user->email)->delete();
             $user->tokens()->delete();
             DB::table('password_reset_tokens')->where('email', $user->email)->delete();

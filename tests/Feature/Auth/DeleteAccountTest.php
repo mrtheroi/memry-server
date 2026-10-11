@@ -213,3 +213,20 @@ test('it answers the exact validation json when the email does not match', funct
             'errors' => ['email' => ['The email does not match your account.']],
         ]);
 });
+
+test('it locks the user row before touching the tokens', function () {
+    $user = User::factory()->create(['email' => 'ada@example.com']);
+    $token = $user->createToken('memry-cli')->plainTextToken;
+    $statements = [];
+    DB::listen(function ($query) use (&$statements) {
+        $statements[] = strtolower($query->sql);
+    });
+
+    $this->withToken($token)->deleteJson('/api/account', ['email' => 'ada@example.com'])->assertNoContent();
+
+    $lock = collect($statements)->search(fn ($s) => str_contains($s, 'from "users"') && str_contains($s, 'for update'));
+    $tokenDelete = collect($statements)->search(fn ($s) => str_starts_with($s, 'delete from "personal_access_tokens"'));
+    expect($lock)->not->toBeFalse()
+        ->and($tokenDelete)->not->toBeFalse()
+        ->and($lock)->toBeLessThan($tokenDelete);
+});

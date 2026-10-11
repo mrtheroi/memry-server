@@ -1,5 +1,6 @@
 <?php
 
+use App\Memory\Domain\ProjectName;
 use App\Memory\Domain\ProjectRepository;
 use App\Models\User;
 use App\Team\Application\ProvisionPersonalTeam;
@@ -34,4 +35,14 @@ test('idFor never inserts and finds an existing project', function () {
     $id = $projects->getOrCreateId($teamId, 'alpha');
 
     expect($projects->idFor($teamId, 'alpha'))->toBe($id);
+});
+
+test('a name that normalization expands past 255 characters is stored', function () {
+    $teamId = personalTeamOf(User::factory()->create());
+    $name = ProjectName::normalize(str_repeat('İ', 255));
+
+    $id = app(ProjectRepository::class)->getOrCreateId($teamId, $name);
+
+    expect(mb_strlen($name))->toBeGreaterThan(255)
+        ->and(ProjectRecord::find($id)->name)->toBe($name);
 });
