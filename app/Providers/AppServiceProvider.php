@@ -3,9 +3,11 @@
 namespace App\Providers;
 
 use App\Memory\Domain\MemoryRepository;
+use App\Memory\Domain\ProjectRepository;
 use App\Memory\Domain\PromptRepository;
 use App\Memory\Infrastructure\Persistence\EloquentMemoryRepository;
 use App\Memory\Infrastructure\Persistence\EloquentPromptRepository;
+use App\Memory\Infrastructure\Persistence\QueryProjectRepository;
 use App\Team\Domain\TeamSlugs;
 use App\Team\Infrastructure\RandomTeamSlugs;
 use Illuminate\Cache\RateLimiting\Limit;
@@ -23,6 +25,7 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->app->bind(MemoryRepository::class, EloquentMemoryRepository::class);
         $this->app->bind(PromptRepository::class, EloquentPromptRepository::class);
+        $this->app->bind(ProjectRepository::class, QueryProjectRepository::class);
         $this->app->bind(TeamSlugs::class, RandomTeamSlugs::class);
     }
 
