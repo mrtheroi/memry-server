@@ -52,7 +52,7 @@ class UserFactory extends Factory
     /**
      * Every real user has a personal team (provisioned at sign-in).
      */
-    protected function callAfterCreating(Collection $instances, ?Model $parent = null)
+    protected function callAfterCreating(Collection $instances, ?Model $parent = null): void
     {
         if ($this->personalTeam) {
             $instances->each(fn (User $user) => app(ProvisionPersonalTeam::class)->forUser($user->id));
