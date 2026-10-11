@@ -34,6 +34,9 @@ class BackfillMemoryTeams extends Command
             $this->line("{$what} without team: {$missing[$what]}");
         }
         $this->line("teams without owner: {$missing['teams_without_owner']}");
+        $this->line("users without personal team: {$missing['users_without_personal_team']}");
+        $this->line("observations with stale project: {$missing['observations_stale_project']}");
+        $this->line("user_prompts with stale project: {$missing['user_prompts_stale_project']}");
 
         return array_sum($missing) > 0 ? self::FAILURE : self::SUCCESS;
     }

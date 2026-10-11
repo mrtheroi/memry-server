@@ -1,5 +1,7 @@
 <?php
 
+use App\Memory\Application\MergeProjects;
+use App\Memory\Domain\ProjectName;
 use App\Models\User;
 use App\Team\Application\BackfillTeams;
 use App\Team\Application\ProvisionPersonalTeam;
@@ -243,4 +245,99 @@ test('a user who signs up while the backfill runs gets a team for their rows', f
 
     expect(DB::table('observations')->whereNull('team_id')->count())->toBe(0)
         ->and(DB::table('teams')->where('personal_team', true)->count())->toBe(2);
+});
+
+function moveBackfilledRowsToBeta(User $user): void
+{
+    app(MergeProjects::class)('alpha', 'beta', $user->id);
+}
+
+test('check reports rows left with a stale project after a legacy project move', function () {
+    $user = User::factory()->create();
+    legacyObservation($user, 'alpha');
+    legacyPrompt($user, 'alpha');
+    $this->artisan('memory:backfill-teams')->assertSuccessful();
+
+    moveBackfilledRowsToBeta($user);
+
+    $this->artisan('memory:backfill-teams', ['--check' => true])
+        ->expectsOutputToContain('observations with stale project: 1')
+        ->expectsOutputToContain('user_prompts with stale project: 1')
+        ->assertFailed();
+});
+
+test('run reconciles project_id after a project move and never touches updated_at', function () {
+    $user = User::factory()->create();
+    $obs = legacyObservation($user, 'alpha');
+    $prompt = legacyPrompt($user, 'alpha');
+    $this->artisan('memory:backfill-teams')->assertSuccessful();
+    moveBackfilledRowsToBeta($user);
+
+    $this->artisan('memory:backfill-teams', ['--chunk' => 1])->assertSuccessful();
+
+    $row = DB::table('observations')->find($obs);
+    expect(DB::table('projects')->where('id', $row->project_id)->value('name'))->toBe('beta')
+        ->and(DB::table('projects')->where('id', DB::table('user_prompts')->find($prompt)->project_id)->value('name'))->toBe('beta')
+        ->and($row->updated_at)->toBe('2026-01-02 00:00:00')
+        ->and($row->created_by)->toBe($user->id);
+    $this->artisan('memory:backfill-teams', ['--check' => true])->assertSuccessful();
+});
+
+test('a row whose project becomes blank gets a NULL project_id', function () {
+    $user = User::factory()->create();
+    $obs = legacyObservation($user, 'alpha');
+    $prompt = legacyPrompt($user, 'alpha');
+    $this->artisan('memory:backfill-teams')->assertSuccessful();
+    DB::table('observations')->update(['project' => '  ']);
+    DB::table('user_prompts')->update(['project' => null]);
+
+    $this->artisan('memory:backfill-teams', ['--check' => true])->assertFailed();
+    $this->artisan('memory:backfill-teams')->assertSuccessful();
+
+    expect(DB::table('observations')->find($obs)->project_id)->toBeNull()
+        ->and(DB::table('user_prompts')->find($prompt)->project_id)->toBeNull();
+    $this->artisan('memory:backfill-teams', ['--check' => true])->assertSuccessful();
+});
+
+test('the SQL project normalization equals ProjectName::normalize', function () {
+    $inputs = ['alpha', 'Alpha', ' alpha ', "\t\n alpha\r\x0B", 'al--pha', 'al___pha', 'a-_-b', '--', '__', '-', '', '   ', "\t", 'ÁLPHA', 'a - b', 'x--_--y'];
+
+    foreach ($inputs as $input) {
+        $sql = DB::selectOne('SELECT '.BackfillTeams::SQL_NORMALIZED.' AS n FROM (SELECT ?::text AS project) t', [$input])->n;
+        expect($sql)->toBe(ProjectName::normalize($input), json_encode($input));
+    }
+});
+
+test('check reports a user without a personal team or owner membership', function () {
+    $user = User::factory()->create();
+
+    $this->artisan('memory:backfill-teams', ['--check' => true])
+        ->expectsOutputToContain('users without personal team: 1')
+        ->assertFailed();
+
+    $this->artisan('memory:backfill-teams')->assertSuccessful();
+    $this->artisan('memory:backfill-teams', ['--check' => true])
+        ->expectsOutputToContain('users without personal team: 0')
+        ->assertSuccessful();
+
+    DB::table('team_user')->where('user_id', $user->id)->delete();
+    $this->artisan('memory:backfill-teams', ['--check' => true])
+        ->expectsOutputToContain('users without personal team: 1')
+        ->assertFailed();
+});
+
+test('tokens are backfilled in whole chunks and still authenticate', function () {
+    $user = User::factory()->create();
+    $plain = array_map(fn ($n) => $user->createToken($n)->plainTextToken, ['a', 'b', 'c']);
+
+    app(BackfillTeams::class)->run(1, 1);
+    expect(DB::table('personal_access_tokens')->whereNotNull('team_id')->count())->toBe(1);
+
+    $this->artisan('memory:backfill-teams', ['--chunk' => 1])->assertSuccessful();
+
+    expect(DB::table('personal_access_tokens')->whereNull('team_id')->count())->toBe(0);
+    foreach ($plain as $token) {
+        $this->app['auth']->forgetGuards();
+        $this->withToken($token)->get('/api/context?project=dbmcp')->assertOk();
+    }
 });
