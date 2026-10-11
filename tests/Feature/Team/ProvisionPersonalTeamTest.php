@@ -3,6 +3,7 @@
 use App\Models\User;
 use App\Team\Application\ProvisionPersonalTeam;
 use App\Team\Domain\PersonalTeamProvisioningFailed;
+use App\Team\Domain\Role;
 use App\Team\Domain\TeamSlugs;
 use App\Team\Infrastructure\Persistence\TeamRecord;
 use App\Team\Infrastructure\Persistence\TeamUserRecord;
@@ -83,6 +84,17 @@ test('it heals a personal team that has no owner membership', function () {
         ->and(TeamRecord::count())->toBe(1)
         ->and(TeamUserRecord::sole()->user_id)->toBe($user->id);
 });
+
+test('it promotes the owner to the owner role when their personal team membership has another role', function (string $role) {
+    $user = User::factory()->create();
+    $team = TeamRecord::factory()->create(['owner_id' => $user->id, 'personal_team' => true]);
+    TeamUserRecord::query()->update(['role' => $role]);
+
+    $teamId = app(ProvisionPersonalTeam::class)->forUser($user->id);
+
+    expect($teamId)->toBe($team->id)
+        ->and(TeamUserRecord::sole()->role)->toBe(Role::Owner);
+})->with(['member', 'admin']);
 
 test('it generates opaque 16 hex char slugs unrelated to the user identity', function () {
     $user = User::factory()->create(['email' => 'jane.doe@example.com', 'name' => 'Jane Doe']);

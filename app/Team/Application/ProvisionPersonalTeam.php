@@ -19,11 +19,15 @@ class ProvisionPersonalTeam
     {
         $teamId = $this->findOrCreateTeam($userId);
 
-        // Also heals a personal team that lost (or never got) its owner row.
+        // Also heals a personal team that lost (or never got) its owner row, or
+        // whose owner's membership carries another role.
         $now = now();
         DB::statement(
             'INSERT INTO team_user (team_id, user_id, role, created_at, updated_at)
-             VALUES (?, ?, \'owner\', ?, ?) ON CONFLICT (team_id, user_id) DO NOTHING',
+             VALUES (?, ?, \'owner\', ?, ?)
+             ON CONFLICT (team_id, user_id) DO UPDATE
+                SET role = \'owner\', updated_at = EXCLUDED.updated_at
+              WHERE team_user.role <> \'owner\'',
             [$teamId, $userId, $now, $now],
         );
 
