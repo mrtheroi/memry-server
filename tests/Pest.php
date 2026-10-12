@@ -96,9 +96,7 @@ function contextFor(User $user): AccessContext
  */
 function recall(User $user, int $id): ?Observation
 {
-    $found = (new EloquentMemoryRepository)->find(AccessContext::system(), $id);
-
-    return $found?->userId === $user->id ? $found : null;
+    return (new EloquentMemoryRepository)->find(contextFor($user), $id);
 }
 
 /**
@@ -106,9 +104,7 @@ function recall(User $user, int $id): ?Observation
  */
 function searchFor(User $user, string $query, int $limit = 10, ?string $project = null): array
 {
-    $found = (new EloquentMemoryRepository)->search(AccessContext::system(), $query, PHP_INT_MAX, $project);
-
-    return array_slice(array_values(array_filter($found, fn (Observation $o) => $o->userId === $user->id)), 0, $limit);
+    return (new EloquentMemoryRepository)->search(contextFor($user), $query, $limit, $project);
 }
 
 function remember(User $user, string $title, string $content, string $project = 'dbmcp', string $type = 'decision', ?string $topicKey = null): Observation

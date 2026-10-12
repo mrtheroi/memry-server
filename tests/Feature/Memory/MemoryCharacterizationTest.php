@@ -35,6 +35,7 @@ function observation(User $user, array $overrides = []): Observation
         'project' => 'dbmcp',
         'scope' => 'project',
         'topicKey' => 'architecture/auth',
+        'teamId' => contextFor($user)->teamId,
         ...$overrides,
     ]);
 }
@@ -145,11 +146,11 @@ test('the topic key is scoped by scope, while search and context ignore the scop
     $repository = new EloquentMemoryRepository;
     $repository->save(observation($user, ['scope' => 'personal', 'title' => 'Personal sanctum note']));
 
-    expect($repository->findByTopicKey($user->id, 'dbmcp', 'project', 'architecture/auth'))->toBeNull()
-        ->and($repository->findByTopicKey($user->id, 'dbmcp', 'personal', 'architecture/auth'))->not->toBeNull()
+    expect($repository->findByTopicKey($user->id, 'dbmcp', 'project', 'architecture/auth', contextFor($user)->teamId))->toBeNull()
+        ->and($repository->findByTopicKey($user->id, 'dbmcp', 'personal', 'architecture/auth', contextFor($user)->teamId))->not->toBeNull()
         ->and(searchFor($user, 'sanctum'))->toHaveCount(1);
 
-    app(SaveObservation::class)(observation($user, ['title' => 'Project note']));
+    app(SaveObservation::class)(observation($user, ['title' => 'Project note']), contextFor($user));
     $this->assertDatabaseCount('observations', 2);
 
     expect(app(BuildProjectContext::class)(AccessContext::system(), 'dbmcp'))->toContain('Personal sanctum note', 'Project note');
@@ -169,8 +170,8 @@ test('a topic key upsert matches a null project against a null project', functio
     $user = User::factory()->create();
     $save = app(SaveObservation::class);
 
-    $first = $save(observation($user, ['project' => null]));
-    $second = $save(observation($user, ['project' => null, 'content' => 'Changed']));
+    $first = $save(observation($user, ['project' => null]), contextFor($user));
+    $second = $save(observation($user, ['project' => null, 'content' => 'Changed']), contextFor($user));
 
     expect($second->id)->toBe($first->id);
     $this->assertDatabaseCount('observations', 1);
@@ -181,15 +182,15 @@ test('an upsert that changes the content moves updated_at and keeps the id, one 
     $save = app(SaveObservation::class);
 
     $this->travelTo('2026-09-01 10:00:00');
-    $first = $save(observation($user));
+    $first = $save(observation($user), contextFor($user));
     $this->travelTo('2026-09-02 10:00:00');
-    $same = $save(observation($user));
+    $same = $save(observation($user), contextFor($user));
 
     expect($same->id)->toBe($first->id)
         ->and(recall($user, $first->id)->updatedAt->format('Y-m-d H:i:s'))->toBe('2026-09-01 10:00:00');
 
     $this->travelTo('2026-09-03 10:00:00');
-    $save(observation($user, ['content' => 'Changed']));
+    $save(observation($user, ['content' => 'Changed']), contextFor($user));
 
     expect(recall($user, $first->id)->updatedAt->format('Y-m-d H:i:s'))->toBe('2026-09-03 10:00:00');
 });
@@ -214,13 +215,13 @@ test('two interleaved SaveObservation calls on the same new topic key leave two 
         return $found;
     });
     $save = new SaveObservation($repository);
-    $interleave = fn () => $save(observation($user, ['content' => 'Writer B']));
+    $interleave = fn () => $save(observation($user, ['content' => 'Writer B']), contextFor($user));
 
-    $save(observation($user, ['content' => 'Writer A']));
+    $save(observation($user, ['content' => 'Writer A']), contextFor($user));
 
     $this->assertDatabaseCount('observations', 2);
 
-    $save(observation($user, ['content' => 'Writer C']));
+    $save(observation($user, ['content' => 'Writer C']), contextFor($user));
 
     $this->assertDatabaseCount('observations', 2);
 });
