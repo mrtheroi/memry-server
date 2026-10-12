@@ -5,6 +5,7 @@ namespace App\Memory\Infrastructure\Persistence;
 use App\Memory\Domain\ProjectRepository;
 use App\Memory\Domain\PromptRepository;
 use App\Memory\Domain\UserPrompt;
+use App\Team\Domain\AccessContext;
 
 final class EloquentPromptRepository implements PromptRepository
 {
@@ -26,8 +27,8 @@ final class EloquentPromptRepository implements PromptRepository
         ]);
     }
 
-    public function moveToProject(string $from, string $to, ?int $userId): int
+    public function moveToProject(AccessContext $context, string $from, string $to): int
     {
-        return (new MoveToProject)('user_prompts', $from, $to, $userId);
+        return (new MoveToProject)($context, 'user_prompts', $from, $to);
     }
 }

@@ -4,6 +4,7 @@ namespace App\Memory\Application;
 
 use App\Memory\Domain\MemoryRepository;
 use App\Memory\Domain\PromptRepository;
+use App\Team\Domain\AccessContext;
 
 final class MergeProjects
 {
@@ -18,14 +19,14 @@ final class MergeProjects
      *
      * @return array{observations: int, prompts: int, collisions: int}
      */
-    public function __invoke(string $from, string $to, ?int $userId = null): array
+    public function __invoke(string $from, string $to, AccessContext $context): array
     {
-        $collisions = $this->memories->countTopicKeyCollisions($from, $to, $userId);
+        $collisions = $this->memories->countTopicKeyCollisions($context, $from, $to);
 
         return [
             'collisions' => $collisions,
-            'observations' => $this->memories->moveToProject($from, $to, $userId),
-            'prompts' => $this->prompts->moveToProject($from, $to, $userId),
+            'observations' => $this->memories->moveToProject($context, $from, $to),
+            'prompts' => $this->prompts->moveToProject($context, $from, $to),
         ];
     }
 }

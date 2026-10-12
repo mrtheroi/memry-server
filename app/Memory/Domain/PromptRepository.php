@@ -2,13 +2,15 @@
 
 namespace App\Memory\Domain;
 
+use App\Team\Domain\AccessContext;
+
 interface PromptRepository
 {
     public function save(UserPrompt $prompt): void;
 
     /**
      * Move prompts to another project, returning how many were moved.
-     * A null user moves the rows of every user.
+     * The system context moves the rows of every team.
      */
-    public function moveToProject(string $from, string $to, ?int $userId): int;
+    public function moveToProject(AccessContext $context, string $from, string $to): int;
 }
