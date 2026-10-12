@@ -5,6 +5,7 @@ namespace App\Mcp\Tools;
 use App\Memory\Application\RecordPrompt;
 use App\Memory\Domain\UserPrompt;
 use App\Team\Domain\AccessContext;
+use App\Team\Domain\AccessDenied;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\JsonSchema\Types\Type;
 use Laravel\Mcp\Request;
@@ -26,15 +27,19 @@ class SavePrompt extends Tool
             'project' => ['max:255'],
         ]);
 
-        $recordPrompt(new UserPrompt(
-            userId: $request->user()->id,
-            sessionId: $request->get('session_id'),
-            project: $request->get('project'),
-            content: $request->get('content'),
-            teamId: $context->teamId,
-        ), $context);
+        try {
+            $recordPrompt(new UserPrompt(
+                userId: $request->user()->id,
+                sessionId: $request->get('session_id'),
+                project: $request->get('project'),
+                content: $request->get('content'),
+                teamId: $context->teamId,
+            ), $context);
 
-        return Response::text('Prompt saved.');
+            return Response::text('Prompt saved.');
+        } catch (AccessDenied $denied) {
+            return Response::error($denied->getMessage());
+        }
     }
 
     /**
