@@ -17,6 +17,14 @@ class BackfillMemoryTeams extends Command
             return $this->check($backfill);
         }
 
+        // The container runs this on every start: a few aggregate counts skip
+        // the per-user walk once everything has a team.
+        if (array_sum($backfill->check()) === 0) {
+            $this->line('Nothing to backfill.');
+
+            return self::SUCCESS;
+        }
+
         $result = $backfill->run(max(1, (int) $this->option('chunk')));
 
         foreach ($result as $what => $count) {

@@ -3,6 +3,7 @@
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 
 uses(RefreshDatabase::class);
 
@@ -22,4 +23,18 @@ it('exits 0 and changes nothing when everything is already backfilled', function
 
 it('exits 0 on an empty install', function () {
     $this->artisan('memory:backfill-teams')->assertExitCode(0);
+});
+
+it('does no per-user work on start when nothing is left to backfill', function () {
+    User::factory()->count(3)->create();
+    $userLocks = 0;
+    DB::listen(function ($query) use (&$userLocks) {
+        if (str_contains($query->sql, 'from "users"') && str_contains($query->sql, 'for share')) {
+            $userLocks++;
+        }
+    });
+
+    expect(Artisan::call('memory:backfill-teams'))->toBe(0)
+        ->and($userLocks)->toBe(0)
+        ->and(Artisan::output())->toBe("Nothing to backfill.\n");
 });
