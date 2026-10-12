@@ -13,8 +13,8 @@ Project names are normalized on write and on query (trimmed, lowercased, repeate
 | `save-memory` | `session_id`*, `type`*, `title`*, `content`*, `project`, `topic_key` | Saves an observation. The same `topic_key` in the same project (under any spelling) updates it instead of duplicating it. |
 | `search-memory` | `query`*, `limit` (1–20, default 10), `project` | Full-text search (title weighs more than content), ordered by relevance. Pass `project` to search only that project; omit it to search all projects. |
 | `session-summary` | `session_id`*, `project`*, `content`*, `repo` | Saves the session summary as an observation of type `session_summary`. Pass `repo` when the project spans several repositories; the title becomes `Session summary: {project} ({repo})`. |
-| `get-context` | `project`* | Returns a bounded context of the project: the last 3 session summaries (the newest in full, the other two with their date and a 300-character preview), up to 20 topic-key memories with a 300-character preview, and up to 10 other recent memories by title. |
-| `get-memory` | `id`* | Returns the full content of one of the user's own memories. An id that does not exist or belongs to another user returns `Memory not found.` |
+| `get-context` | `project`* | Returns a bounded context of the project, limited to the request's team and the projects the user can access (a project that exists only in another team answers `No context found for project {name}.`): the last 3 session summaries (the newest in full, the other two with their date and a 300-character preview), up to 20 topic-key memories with a 300-character preview, and up to 10 other recent memories by title. |
+| `get-memory` | `id`* | Returns the full content of one memory of the request's team (the token's team, or the user's personal team for older tokens), limited to the projects the user can access. An id that does not exist or belongs to another team returns `Memory not found.` |
 | `save-prompt` | `session_id`*, `content`*, `project` | Stores the user's prompt verbatim. |
 
 ## HTTP context endpoint

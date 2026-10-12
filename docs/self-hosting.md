@@ -195,7 +195,7 @@ Agents send bearer tokens on every request, so do not expose the server over pla
 
 ## Upgrades
 
-Read the [CHANGELOG](../CHANGELOG.md) first, then run migrations after updating the image.
+Read the [CHANGELOG](../CHANGELOG.md) first, then run migrations after updating the image. Upgrading from a release before teams, the migration also creates a personal team for every user and assigns it to their existing memories, prompts and tokens; no separate step is needed.
 
 With the published image, set `MEMRY_IMAGE` in `.env` to the new release and pull it. Download that release's `docker-compose.yml` and `community.env.example` again and compare them with your copies, since new settings can appear:
 

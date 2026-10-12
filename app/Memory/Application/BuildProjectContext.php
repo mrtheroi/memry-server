@@ -5,18 +5,24 @@ namespace App\Memory\Application;
 use App\Memory\Domain\MemoryRepository;
 use App\Memory\Domain\Observation;
 use App\Memory\Domain\ProjectName;
+use App\Team\Domain\AccessContext;
 
 final class BuildProjectContext
 {
     public function __construct(private MemoryRepository $memories) {}
 
-    public function __invoke(int $userId, ?string $project): string
+    /**
+     * A bare user id is the legacy form: every row of that user, whatever its team. Request paths
+     * pass the AccessContext, which scopes the read to the request's team and allowed projects.
+     */
+    public function __invoke(AccessContext|int $access, ?string $project): string
     {
         $project = ProjectName::normalize($project);
+        [$context, $onlyUserId] = $access instanceof AccessContext ? [$access, null] : [AccessContext::system(), $access];
 
-        $sessions = $this->memories->recentSessionSummaries($userId, $project, 3);
-        $knowledge = $this->memories->withTopicKey($userId, $project, 20);
-        $recent = $this->memories->recentWithoutTopicKey($userId, $project, 10);
+        $sessions = $this->memories->recentSessionSummaries($context, $project, 3, $onlyUserId);
+        $knowledge = $this->memories->withTopicKey($context, $project, 20, $onlyUserId);
+        $recent = $this->memories->recentWithoutTopicKey($context, $project, 10, $onlyUserId);
 
         if ($sessions === [] && $knowledge === [] && $recent === []) {
             return "No context found for project {$project}.";

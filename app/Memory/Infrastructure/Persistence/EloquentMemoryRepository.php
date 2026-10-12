@@ -89,45 +89,23 @@ final class EloquentMemoryRepository implements MemoryRepository
             ->all();
     }
 
-    public function recentSessionSummaries(int $userId, string $project, int $limit): array
+    public function recentSessionSummaries(AccessContext $context, string $project, int $limit, ?int $onlyUserId = null): array
     {
-        return ObservationRecord::where('user_id', $userId)
-            ->where('project', $project)
-            ->where('type', 'session_summary')
-            ->latest('updated_at')
-            ->latest('id')
-            ->limit($limit)
-            ->get()
-            ->map(fn (ObservationRecord $record) => $this->toDomain($record))
-            ->all();
+        return $this->recentOf($context, $project, $limit, $onlyUserId, fn (Builder $builder) => $builder->where('type', 'session_summary'));
     }
 
-    public function withTopicKey(int $userId, string $project, int $limit): array
+    public function withTopicKey(AccessContext $context, string $project, int $limit, ?int $onlyUserId = null): array
     {
-        return ObservationRecord::where('user_id', $userId)
-            ->where('project', $project)
+        return $this->recentOf($context, $project, $limit, $onlyUserId, fn (Builder $builder) => $builder
             ->where('type', '!=', 'session_summary')
-            ->whereNotNull('topic_key')
-            ->latest('updated_at')
-            ->latest('id')
-            ->limit($limit)
-            ->get()
-            ->map(fn (ObservationRecord $record) => $this->toDomain($record))
-            ->all();
+            ->whereNotNull('topic_key'));
     }
 
-    public function recentWithoutTopicKey(int $userId, string $project, int $limit): array
+    public function recentWithoutTopicKey(AccessContext $context, string $project, int $limit, ?int $onlyUserId = null): array
     {
-        return ObservationRecord::where('user_id', $userId)
-            ->where('project', $project)
+        return $this->recentOf($context, $project, $limit, $onlyUserId, fn (Builder $builder) => $builder
             ->where('type', '!=', 'session_summary')
-            ->whereNull('topic_key')
-            ->latest('updated_at')
-            ->latest('id')
-            ->limit($limit)
-            ->get()
-            ->map(fn (ObservationRecord $record) => $this->toDomain($record))
-            ->all();
+            ->whereNull('topic_key'));
     }
 
     public function countTopicKeyCollisions(string $from, string $to, ?int $userId): int
@@ -145,6 +123,26 @@ final class EloquentMemoryRepository implements MemoryRepository
     public function moveToProject(string $from, string $to, ?int $userId): int
     {
         return (new MoveToProject)('observations', $from, $to, $userId);
+    }
+
+    /**
+     * @param  callable(Builder): Builder  $narrow
+     * @return list<Observation>
+     */
+    private function recentOf(AccessContext $context, string $project, int $limit, ?int $onlyUserId, callable $narrow): array
+    {
+        if ($context->isDenied()) {
+            return [];
+        }
+
+        return $narrow($this->scopeTo(ObservationRecord::where('project', $project), $context))
+            ->when($onlyUserId !== null, fn (Builder $builder) => $builder->where('user_id', $onlyUserId))
+            ->latest('updated_at')
+            ->latest('id')
+            ->limit($limit)
+            ->get()
+            ->map(fn (ObservationRecord $record) => $this->toDomain($record))
+            ->all();
     }
 
     /**

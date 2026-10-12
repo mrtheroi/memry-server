@@ -5,10 +5,11 @@ use App\Mcp\Tools\GetMemory;
 use App\Memory\Domain\Observation;
 use App\Memory\Infrastructure\Persistence\EloquentMemoryRepository;
 use App\Models\User;
+use App\Team\Application\BackfillTeams;
 use App\Team\Domain\AccessContext;
 use App\Team\Domain\ProjectAccess;
 use App\Team\Domain\Role;
-use App\Team\Infrastructure\Persistence\TeamRecord;
+use Illuminate\Database\Migrations\Migration;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 
@@ -22,19 +23,6 @@ test('find returns null for a memory of another team (S-T9.6)', function () {
     expect((new EloquentMemoryRepository)->find(contextFor($stranger), $memory->id))->toBeNull()
         ->and((new EloquentMemoryRepository)->find(contextFor($owner), $memory->id)?->title)->toBe('Team secret');
 });
-
-function teamMemory(int $teamId, User $author, string $title, string $project = 'dbmcp'): Observation
-{
-    return (new EloquentMemoryRepository)->save(new Observation(
-        userId: $author->id, sessionId: 's', type: 'decision', title: $title, content: 'sanctum content',
-        project: $project, scope: 'project', topicKey: null, teamId: $teamId,
-    ));
-}
-
-function sharedTeamOf(User $user): int
-{
-    return TeamRecord::factory()->create(['owner_id' => $user->id])->id;
-}
 
 function titles(array $observations): array
 {
@@ -114,14 +102,46 @@ test('get-memory of a foreign id answers exactly like a missing id (S-T9.1)', fu
     MemoryServer::actingAs($user)->tool(GetMemory::class, ['id' => 999999])->assertExactText('Memory not found.');
 });
 
-test('the backfill guard migration refuses to run while rows lack a team', function () {
-    $user = User::factory()->create();
-    remember($user, 'Filled', 'x');
-    $migration = require database_path('migrations/2026_10_12_100000_assert_team_backfill_complete.php');
-    $migration->up();
+function backfillMigration(): Migration
+{
+    return require database_path('migrations/2026_10_12_100000_backfill_teams_then_assert_complete.php');
+}
 
-    DB::table('observations')->insert(['user_id' => $user->id, 'session_id' => 's', 'type' => 't', 'title' => 'Legacy', 'content' => 'c', 'scope' => 'project', 'created_at' => now(), 'updated_at' => now()]);
+function insertLegacyRows(User $user): void
+{
+    DB::table('observations')->insert(['user_id' => $user->id, 'session_id' => 's', 'type' => 't', 'title' => 'Legacy', 'content' => 'c', 'scope' => 'project', 'project' => 'dbmcp', 'created_at' => now(), 'updated_at' => now()]);
     DB::table('user_prompts')->insert(['user_id' => $user->id, 'session_id' => 's', 'content' => 'p', 'created_at' => now(), 'updated_at' => now()]);
+}
 
-    expect(fn () => $migration->up())->toThrow(RuntimeException::class, 'Run memory:backfill-teams first: 2 rows without team_id');
+test('the upgrade migration backfills legacy rows instead of refusing to run', function () {
+    $user = User::factory()->withoutPersonalTeam()->create();
+    insertLegacyRows($user);
+
+    backfillMigration()->up();
+
+    expect(DB::table('observations')->whereNull('team_id')->count())->toBe(0)
+        ->and(DB::table('user_prompts')->whereNull('team_id')->count())->toBe(0)
+        ->and(DB::table('observations')->value('team_id'))->toBe(DB::table('teams')->where('owner_id', $user->id)->value('id'));
+});
+
+test('the upgrade migration still refuses when rows remain without a team after the backfill', function () {
+    $user = User::factory()->create();
+    insertLegacyRows($user);
+    app()->bind(BackfillTeams::class, fn () => new class extends BackfillTeams
+    {
+        public function __construct() {}
+
+        public function run(int $chunk, ?int $maxChunks = null): array
+        {
+            return ['teams' => 0, 'observations' => 0, 'user_prompts' => 0, 'tokens' => 0];
+        }
+    });
+
+    expect(fn () => backfillMigration()->up())->toThrow(RuntimeException::class, 'Run memory:backfill-teams first: 2 rows without team_id');
+});
+
+test('the upgrade migration passes on a database with nothing to backfill', function () {
+    remember(User::factory()->create(), 'Filled', 'x');
+
+    expect(fn () => backfillMigration()->up())->not->toThrow(RuntimeException::class);
 });

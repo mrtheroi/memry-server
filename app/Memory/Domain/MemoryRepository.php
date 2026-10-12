@@ -20,17 +20,17 @@ interface MemoryRepository
     /**
      * @return list<Observation>
      */
-    public function recentSessionSummaries(int $userId, string $project, int $limit): array;
+    public function recentSessionSummaries(AccessContext $context, string $project, int $limit, ?int $onlyUserId = null): array;
 
     /**
      * @return list<Observation>
      */
-    public function withTopicKey(int $userId, string $project, int $limit): array;
+    public function withTopicKey(AccessContext $context, string $project, int $limit, ?int $onlyUserId = null): array;
 
     /**
      * @return list<Observation>
      */
-    public function recentWithoutTopicKey(int $userId, string $project, int $limit): array;
+    public function recentWithoutTopicKey(AccessContext $context, string $project, int $limit, ?int $onlyUserId = null): array;
 
     /**
      * Count the observations of a project whose user already has the same

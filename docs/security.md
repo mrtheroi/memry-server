@@ -5,8 +5,10 @@ Security notes for memry-server. See [API](api.md) for the endpoints they apply 
 ## Authentication and data access
 
 - `/mcp/memory` and `/api/context` require a Sanctum token and return 401 without one.
-- `user_id` comes from the token, never from tool arguments; every query is scoped to it.
-- `get-memory` answers `Memory not found.` for another user's id, the same as for a missing id, so it does not reveal that the memory exists.
+- The user and the team come from the token, never from tool arguments. Every read and write is scoped to the request's team: the token's team, or the user's personal team for older tokens.
+- Owners and admins see all the team's projects; members see nothing until project grants exist. Memories without a project are visible only to owners and admins.
+- `get-memory` answers `Memory not found.` for another team's id, the same as for a missing id, so it does not reveal that the memory exists. Every id listed by `get-context` or `search-memory` can be read with `get-memory` under the same token.
+- Self-hosted upgrades backfill teams automatically during `migrate`; the migration refuses to finish if any memory or prompt is left without a team.
 - `DELETE /api/account` requires the account email in the body and removes all of the user's data (memories, prompts, tokens and login codes).
 - Every tool validates its input on the server, including maximum lengths (255 characters for identifiers, 20,000 for content).
 

@@ -5,6 +5,7 @@ use App\Memory\Infrastructure\Persistence\EloquentMemoryRepository;
 use App\Models\User;
 use App\Team\Domain\AccessContext;
 use App\Team\Domain\AccessContextResolver;
+use App\Team\Infrastructure\Persistence\TeamRecord;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Mcp\Server\Testing\TestResponse;
 use PHPUnit\Framework\Assert;
@@ -123,4 +124,17 @@ function remember(User $user, string $title, string $content, string $project = 
         topicKey: $topicKey,
         teamId: contextFor($user)->teamId,
     ));
+}
+
+function teamMemory(int $teamId, User $author, string $title, string $project = 'dbmcp'): Observation
+{
+    return (new EloquentMemoryRepository)->save(new Observation(
+        userId: $author->id, sessionId: 's', type: 'decision', title: $title, content: 'sanctum content',
+        project: $project, scope: 'project', topicKey: null, teamId: $teamId,
+    ));
+}
+
+function sharedTeamOf(User $user): int
+{
+    return TeamRecord::factory()->create(['owner_id' => $user->id])->id;
 }
