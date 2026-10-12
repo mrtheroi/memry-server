@@ -42,7 +42,7 @@ test('a team without an owner membership is accepted', function () {
 });
 
 test('a team and its matching owner membership are accepted', function () {
-    $owner = User::factory()->create();
+    $owner = User::factory()->withoutPersonalTeam()->create();
     insertMembership(insertTeam($owner->id), $owner->id, 'owner');
 
     expect(DB::table('team_user')->count())->toBe(1);

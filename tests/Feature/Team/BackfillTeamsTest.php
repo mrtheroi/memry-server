@@ -41,8 +41,8 @@ function legacyPrompt(User $user, ?string $project): int
 }
 
 test('two users with the same project name get two projects in their own teams', function () {
-    $a = User::factory()->create();
-    $b = User::factory()->create();
+    $a = User::factory()->withoutPersonalTeam()->create();
+    $b = User::factory()->withoutPersonalTeam()->create();
     $obsA = legacyObservation($a, 'alpha');
     $obsB = legacyObservation($b, 'alpha');
 
@@ -60,7 +60,7 @@ test('two users with the same project name get two projects in their own teams',
 });
 
 test('null and blank projects get no project row', function () {
-    $user = User::factory()->create();
+    $user = User::factory()->withoutPersonalTeam()->create();
     $ids = [legacyObservation($user, null), legacyObservation($user, '   ')];
 
     $this->artisan('memory:backfill-teams')->assertSuccessful();
@@ -70,7 +70,7 @@ test('null and blank projects get no project row', function () {
 });
 
 test('a second run changes nothing', function () {
-    $user = User::factory()->create();
+    $user = User::factory()->withoutPersonalTeam()->create();
     legacyObservation($user, 'alpha');
     legacyPrompt($user, 'alpha');
     $user->createToken('t');
@@ -84,7 +84,7 @@ test('a second run changes nothing', function () {
 });
 
 test('it reuses the team created at signup', function () {
-    $user = User::factory()->create();
+    $user = User::factory()->withoutPersonalTeam()->create();
     $teamId = app(ProvisionPersonalTeam::class)->forUser($user->id);
     $id = legacyObservation($user, 'alpha');
 
@@ -95,7 +95,7 @@ test('it reuses the team created at signup', function () {
 });
 
 test('name variants map to one project per ProjectName rules', function () {
-    $user = User::factory()->create();
+    $user = User::factory()->withoutPersonalTeam()->create();
     $ids = array_map(fn ($p) => legacyObservation($user, $p), ['Alpha', ' alpha ', 'ALPHA']);
     $dashed = legacyObservation($user, 'al--pha');
 
@@ -120,7 +120,7 @@ function backfillSnapshot(): array
 
 function seedLegacy(): void
 {
-    $users = User::factory()->count(2)->create();
+    $users = User::factory()->withoutPersonalTeam()->count(2)->create();
     foreach ($users as $user) {
         foreach (['alpha', 'beta', null, 'alpha'] as $project) {
             legacyObservation($user, $project);
@@ -159,7 +159,7 @@ test('resuming after the first chunk equals an uninterrupted run', function () {
 });
 
 test('it never touches updated_at or user_id', function () {
-    $user = User::factory()->create();
+    $user = User::factory()->withoutPersonalTeam()->create();
     $id = legacyObservation($user, 'alpha');
 
     $this->artisan('memory:backfill-teams')->assertSuccessful();
@@ -170,7 +170,7 @@ test('it never touches updated_at or user_id', function () {
 });
 
 test('prompts get a team and a project', function () {
-    $user = User::factory()->create();
+    $user = User::factory()->withoutPersonalTeam()->create();
     $id = legacyPrompt($user, 'Alpha');
 
     $this->artisan('memory:backfill-teams')->assertSuccessful();
@@ -182,7 +182,7 @@ test('prompts get a team and a project', function () {
 });
 
 test('a legacy token gets the personal team and still authenticates', function () {
-    $user = User::factory()->create();
+    $user = User::factory()->withoutPersonalTeam()->create();
     $token = $user->createToken('legacy')->plainTextToken;
     $this->withToken($token)->get('/api/context?project=dbmcp')->assertOk();
 
@@ -195,7 +195,7 @@ test('a legacy token gets the personal team and still authenticates', function (
 });
 
 test('check fails while rows lack a team and passes after a full run', function () {
-    $user = User::factory()->create();
+    $user = User::factory()->withoutPersonalTeam()->create();
     legacyObservation($user, 'alpha');
     legacyPrompt($user, 'alpha');
     $user->createToken('legacy');
@@ -213,7 +213,7 @@ test('check fails while rows lack a team and passes after a full run', function 
 });
 
 test('check reports a team without an owner membership', function () {
-    $user = User::factory()->create();
+    $user = User::factory()->withoutPersonalTeam()->create();
     $this->artisan('memory:backfill-teams')->assertSuccessful();
     DB::table('team_user')->delete();
 
@@ -223,7 +223,7 @@ test('check reports a team without an owner membership', function () {
 });
 
 test('a user who signs up while the backfill runs gets a team for their rows', function () {
-    $early = User::factory()->create();
+    $early = User::factory()->withoutPersonalTeam()->create();
     legacyObservation($early, 'alpha');
 
     // A signup during the first user's transaction is not in the user chunk
@@ -236,7 +236,7 @@ test('a user who signs up while the backfill runs gets a team for their rows', f
         {
             if (! $this->signedUp) {
                 $this->signedUp = true;
-                legacyObservation(User::factory()->create(), 'beta');
+                legacyObservation(User::factory()->withoutPersonalTeam()->create(), 'beta');
             }
 
             return parent::forUser($userId);
@@ -250,7 +250,7 @@ test('a user who signs up while the backfill runs gets a team for their rows', f
 });
 
 test('check reports a user without a personal team or owner membership', function () {
-    $user = User::factory()->create();
+    $user = User::factory()->withoutPersonalTeam()->create();
 
     $this->artisan('memory:backfill-teams', ['--check' => true])
         ->expectsOutputToContain('users without personal team: 1')
@@ -268,7 +268,7 @@ test('check reports a user without a personal team or owner membership', functio
 });
 
 test('a user\'s tokens are backfilled in sub-chunks, each transaction locking the user first, and still authenticate', function () {
-    $user = User::factory()->create();
+    $user = User::factory()->withoutPersonalTeam()->create();
     $plain = array_map(fn ($n) => $user->createToken($n)->plainTextToken, ['a', 'b', 'c']);
 
     $locks = 0;
@@ -288,8 +288,8 @@ test('a user\'s tokens are backfilled in sub-chunks, each transaction locking th
 });
 
 test('a row written by newer code during the chunk is never overwritten', function () {
-    $user = User::factory()->create();
-    $other = User::factory()->create();
+    $user = User::factory()->withoutPersonalTeam()->create();
+    $other = User::factory()->withoutPersonalTeam()->create();
     $raced = legacyObservation($user, 'alpha');
     $filled = legacyObservation($user, 'alpha');
     $racedPrompt = legacyPrompt($user, 'alpha');
@@ -336,7 +336,7 @@ test('a row written by newer code during the chunk is never overwritten', functi
 });
 
 test('users are provisioned in keyset chunks and every user gets a personal team', function () {
-    User::factory()->count(3)->create();
+    User::factory()->withoutPersonalTeam()->count(3)->create();
     legacyObservation(User::first(), 'alpha');
     $unbounded = 0;
     DB::listen(function ($query) use (&$unbounded) {
@@ -355,7 +355,7 @@ test('users are provisioned in keyset chunks and every user gets a personal team
 });
 
 test('a user deleted before their team is provisioned is skipped, with their orphan tokens', function () {
-    $gone = User::factory()->create();
+    $gone = User::factory()->withoutPersonalTeam()->create();
     $goneId = $gone->id;
     $gone->delete();
     // tokenable_id has no foreign key, so a token can outlive its user: the
@@ -372,7 +372,7 @@ test('a user deleted before their team is provisioned is skipped, with their orp
 });
 
 test('each user is backfilled in one transaction that locks the user row first', function () {
-    $user = User::factory()->create();
+    $user = User::factory()->withoutPersonalTeam()->create();
     legacyObservation($user, 'alpha');
     legacyPrompt($user, 'alpha');
     $user->createToken('legacy');
