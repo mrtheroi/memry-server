@@ -89,21 +89,21 @@ final class EloquentMemoryRepository implements MemoryRepository
             ->all();
     }
 
-    public function recentSessionSummaries(AccessContext $context, string $project, int $limit, ?int $onlyUserId = null): array
+    public function recentSessionSummaries(AccessContext $context, string $project, int $limit): array
     {
-        return $this->recentOf($context, $project, $limit, $onlyUserId, fn (Builder $builder) => $builder->where('type', 'session_summary'));
+        return $this->recentOf($context, $project, $limit, fn (Builder $builder) => $builder->where('type', 'session_summary'));
     }
 
-    public function withTopicKey(AccessContext $context, string $project, int $limit, ?int $onlyUserId = null): array
+    public function withTopicKey(AccessContext $context, string $project, int $limit): array
     {
-        return $this->recentOf($context, $project, $limit, $onlyUserId, fn (Builder $builder) => $builder
+        return $this->recentOf($context, $project, $limit, fn (Builder $builder) => $builder
             ->where('type', '!=', 'session_summary')
             ->whereNotNull('topic_key'));
     }
 
-    public function recentWithoutTopicKey(AccessContext $context, string $project, int $limit, ?int $onlyUserId = null): array
+    public function recentWithoutTopicKey(AccessContext $context, string $project, int $limit): array
     {
-        return $this->recentOf($context, $project, $limit, $onlyUserId, fn (Builder $builder) => $builder
+        return $this->recentOf($context, $project, $limit, fn (Builder $builder) => $builder
             ->where('type', '!=', 'session_summary')
             ->whereNull('topic_key'));
     }
@@ -129,14 +129,13 @@ final class EloquentMemoryRepository implements MemoryRepository
      * @param  callable(Builder): Builder  $narrow
      * @return list<Observation>
      */
-    private function recentOf(AccessContext $context, string $project, int $limit, ?int $onlyUserId, callable $narrow): array
+    private function recentOf(AccessContext $context, string $project, int $limit, callable $narrow): array
     {
         if ($context->isDenied()) {
             return [];
         }
 
         return $narrow($this->scopeTo(ObservationRecord::where('project', $project), $context))
-            ->when($onlyUserId !== null, fn (Builder $builder) => $builder->where('user_id', $onlyUserId))
             ->latest('updated_at')
             ->latest('id')
             ->limit($limit)

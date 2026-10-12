@@ -11,18 +11,13 @@ final class BuildProjectContext
 {
     public function __construct(private MemoryRepository $memories) {}
 
-    /**
-     * A bare user id is the legacy form: every row of that user, whatever its team. Request paths
-     * pass the AccessContext, which scopes the read to the request's team and allowed projects.
-     */
-    public function __invoke(AccessContext|int $access, ?string $project): string
+    public function __invoke(AccessContext $access, ?string $project): string
     {
         $project = ProjectName::normalize($project);
-        [$context, $onlyUserId] = $access instanceof AccessContext ? [$access, null] : [AccessContext::system(), $access];
 
-        $sessions = $this->memories->recentSessionSummaries($context, $project, 3, $onlyUserId);
-        $knowledge = $this->memories->withTopicKey($context, $project, 20, $onlyUserId);
-        $recent = $this->memories->recentWithoutTopicKey($context, $project, 10, $onlyUserId);
+        $sessions = $this->memories->recentSessionSummaries($access, $project, 3);
+        $knowledge = $this->memories->withTopicKey($access, $project, 20);
+        $recent = $this->memories->recentWithoutTopicKey($access, $project, 10);
 
         if ($sessions === [] && $knowledge === [] && $recent === []) {
             return "No context found for project {$project}.";
