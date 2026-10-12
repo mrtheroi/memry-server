@@ -4,6 +4,8 @@ namespace App\Mcp\Tools;
 
 use App\Memory\Application\SaveObservation;
 use App\Memory\Domain\Observation;
+use App\Team\Domain\AccessContext;
+use App\Team\Domain\AccessDenied;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\JsonSchema\Types\Type;
 use Laravel\Mcp\Request;
@@ -17,7 +19,7 @@ class SaveMemory extends Tool
     /**
      * Handle the tool request.
      */
-    public function handle(Request $request, SaveObservation $saveObservation): Response
+    public function handle(Request $request, SaveObservation $saveObservation, AccessContext $context): Response
     {
         $request->validate([
             'session_id' => ['required', 'max:255'],
@@ -28,18 +30,23 @@ class SaveMemory extends Tool
             'topic_key' => ['max:255'],
         ]);
 
-        $observation = $saveObservation(new Observation(
-            userId: $request->user()->id,
-            sessionId: $request->get('session_id'),
-            type: $request->get('type'),
-            title: $request->get('title'),
-            content: $request->get('content'),
-            project: $request->get('project'),
-            scope: 'project',
-            topicKey: $request->get('topic_key'),
-        ));
+        try {
+            $observation = $saveObservation(new Observation(
+                userId: $request->user()->id,
+                sessionId: $request->get('session_id'),
+                type: $request->get('type'),
+                title: $request->get('title'),
+                content: $request->get('content'),
+                project: $request->get('project'),
+                scope: 'project',
+                topicKey: $request->get('topic_key'),
+                teamId: $context->teamId,
+            ), $context);
 
-        return Response::text("Memory saved with id {$observation->id}.");
+            return Response::text("Memory saved with id {$observation->id}.");
+        } catch (AccessDenied $denied) {
+            return Response::error($denied->getMessage());
+        }
     }
 
     /**

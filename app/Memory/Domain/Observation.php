@@ -19,8 +19,25 @@ final readonly class Observation
         public ?string $topicKey,
         public ?int $id = null,
         public ?DateTimeImmutable $updatedAt = null,
+        public ?int $teamId = null,
     ) {
         $this->project = ProjectName::normalize($project);
+    }
+
+    public function withTeamId(?int $teamId): self
+    {
+        return new self(
+            userId: $this->userId,
+            sessionId: $this->sessionId,
+            type: $this->type,
+            title: $this->title,
+            content: $this->content,
+            project: $this->project,
+            scope: $this->scope,
+            topicKey: $this->topicKey,
+            id: $this->id,
+            teamId: $teamId,
+        );
     }
 
     public function withId(int $id): self
@@ -35,6 +52,7 @@ final readonly class Observation
             scope: $this->scope,
             topicKey: $this->topicKey,
             id: $id,
+            teamId: $this->teamId,
         );
     }
 }

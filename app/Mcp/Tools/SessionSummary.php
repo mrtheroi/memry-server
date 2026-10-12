@@ -4,6 +4,8 @@ namespace App\Mcp\Tools;
 
 use App\Memory\Application\SaveObservation;
 use App\Memory\Domain\Observation;
+use App\Team\Domain\AccessContext;
+use App\Team\Domain\AccessDenied;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\JsonSchema\Types\Type;
 use Illuminate\Support\Str;
@@ -18,7 +20,7 @@ class SessionSummary extends Tool
     /**
      * Handle the tool request.
      */
-    public function handle(Request $request, SaveObservation $saveObservation): Response
+    public function handle(Request $request, SaveObservation $saveObservation, AccessContext $context): Response
     {
         $request->validate([
             'session_id' => ['required', 'max:255'],
@@ -27,22 +29,27 @@ class SessionSummary extends Tool
             'repo' => ['nullable', 'string', 'max:255'],
         ]);
 
-        $project = $request->get('project');
-        $repo = trim($request->get('repo') ?? '');
-        $title = $repo === '' ? "Session summary: {$project}" : "Session summary: {$project} ({$repo})";
+        try {
+            $project = $request->get('project');
+            $repo = trim($request->get('repo') ?? '');
+            $title = $repo === '' ? "Session summary: {$project}" : "Session summary: {$project} ({$repo})";
 
-        $saveObservation(new Observation(
-            userId: $request->user()->id,
-            sessionId: $request->get('session_id'),
-            type: 'session_summary',
-            title: Str::limit($title, 255, ''),
-            content: $request->get('content'),
-            project: $project,
-            scope: 'project',
-            topicKey: null,
-        ));
+            $saveObservation(new Observation(
+                userId: $request->user()->id,
+                sessionId: $request->get('session_id'),
+                type: 'session_summary',
+                title: Str::limit($title, 255, ''),
+                content: $request->get('content'),
+                project: $project,
+                scope: 'project',
+                topicKey: null,
+                teamId: $context->teamId,
+            ), $context);
 
-        return Response::text('Session summary saved.');
+            return Response::text('Session summary saved.');
+        } catch (AccessDenied $denied) {
+            return Response::error($denied->getMessage());
+        }
     }
 
     /**

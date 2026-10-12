@@ -8,7 +8,7 @@ interface MemoryRepository
 
     public function find(int $id): ?Observation;
 
-    public function findByTopicKey(int $userId, ?string $project, string $scope, string $topicKey): ?Observation;
+    public function findByTopicKey(int $userId, ?string $project, string $scope, string $topicKey, ?int $teamId = null): ?Observation;
 
     /**
      * @return list<Observation>

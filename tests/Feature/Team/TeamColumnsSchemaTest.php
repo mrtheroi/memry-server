@@ -38,8 +38,8 @@ function observationRow(int $userId, array $extra = []): array
     ];
 }
 
-test('the existing write path leaves the new team columns NULL', function () {
-    $user = User::factory()->create();
+test('the write path of a user without a team leaves the new team columns NULL', function () {
+    $user = User::factory()->withoutPersonalTeam()->create();
 
     MemoryServer::actingAs($user)->tool(SaveMemory::class, [
         'session_id' => 's', 'type' => 'decision', 'title' => 'T', 'content' => 'C', 'project' => 'p',
