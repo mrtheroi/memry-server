@@ -5,6 +5,8 @@ namespace App\Console\Commands;
 use App\Memory\Application\MergeProjects;
 use App\Memory\Domain\ProjectName;
 use App\Models\User;
+use App\Team\Domain\AccessContext;
+use App\Team\Domain\AccessContextResolver;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
@@ -18,7 +20,7 @@ class MergeMemoryProjects extends Command
     /**
      * Execute the console command.
      */
-    public function handle(MergeProjects $mergeProjects): int
+    public function handle(MergeProjects $mergeProjects, AccessContextResolver $contexts): int
     {
         $from = ProjectName::normalize($this->argument('from'));
         $to = ProjectName::normalize($this->argument('to'));
@@ -36,7 +38,7 @@ class MergeMemoryProjects extends Command
         }
 
         $email = $this->option('email');
-        $userId = null;
+        $context = AccessContext::system();
 
         if ($email !== null) {
             $email = Str::lower(trim($email));
@@ -48,10 +50,11 @@ class MergeMemoryProjects extends Command
                 return self::FAILURE;
             }
 
-            $userId = $user->id;
+            // The command has no token, so the resolver yields the personal-team context.
+            $context = $contexts->resolve($user);
         }
 
-        $moved = DB::transaction(fn () => $mergeProjects($from, $to, $userId));
+        $moved = DB::transaction(fn () => $mergeProjects($from, $to, $context));
 
         $this->line("Moved {$moved['observations']} observations and {$moved['prompts']} prompts from {$from} to {$to}.");
         $this->line("{$moved['collisions']} topic_key collisions (same user and topic_key now twice in {$to}) left to resolve.");

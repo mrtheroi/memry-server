@@ -17,8 +17,8 @@ final class EloquentMemoryRepository implements MemoryRepository
         $record = $observation->id === null
             ? new ObservationRecord
             : $this->withinTeam(ObservationRecord::where('id', $observation->id), $observation->teamId)->firstOrFail();
+        $record->user_id ??= $observation->userId;
         $record->fill([
-            'user_id' => $observation->userId,
             'session_id' => $observation->sessionId,
             'type' => $observation->type,
             'title' => $observation->title,
@@ -58,16 +58,19 @@ final class EloquentMemoryRepository implements MemoryRepository
     }
 
     /**
-     * With a team, matches that team's rows first and then the user's still-unowned legacy rows
-     * (adopted on save); never another team's. Without a team, matches legacy rows only.
+     * Project scope resolves per team, whoever wrote it; personal scope only among the writer's own rows.
      */
-    public function findByTopicKey(int $userId, ?string $project, string $scope, string $topicKey, ?int $teamId = null): ?Observation
+    public function findByTopicKey(AccessContext $context, ?string $project, string $scope, string $topicKey): ?Observation
     {
-        $record = $this->withinTeam(ObservationRecord::where('user_id', $userId), $teamId)
+        if ($context->isDenied() || $context->isSystem()) {
+            return null;
+        }
+
+        $record = ObservationRecord::where('team_id', $context->teamId)
             ->where('project', $project)
             ->where('scope', $scope)
             ->where('topic_key', $topicKey)
-            ->orderByRaw('team_id IS NULL')
+            ->when($scope === 'personal', fn (Builder $builder) => $builder->where('user_id', $context->userId))
             ->first();
 
         return $record ? $this->toDomain($record) : null;
@@ -108,21 +111,25 @@ final class EloquentMemoryRepository implements MemoryRepository
             ->whereNull('topic_key'));
     }
 
-    public function countTopicKeyCollisions(string $from, string $to, ?int $userId): int
+    public function countTopicKeyCollisions(AccessContext $context, string $from, string $to): int
     {
+        if ($context->isDenied()) {
+            return 0;
+        }
+
         return ObservationRecord::where('project', $from)
-            ->when($userId, fn ($builder) => $builder->where('user_id', $userId))
+            ->when(! $context->isSystem(), fn ($builder) => $builder->where('team_id', $context->teamId))
             ->whereNotNull('topic_key')
             ->whereExists(fn ($query) => $query->from('observations as target')
-                ->whereColumn('target.user_id', 'observations.user_id')
+                ->whereColumn('target.team_id', 'observations.team_id')
                 ->whereColumn('target.topic_key', 'observations.topic_key')
                 ->where('target.project', $to))
             ->count();
     }
 
-    public function moveToProject(string $from, string $to, ?int $userId): int
+    public function moveToProject(AccessContext $context, string $from, string $to): int
     {
-        return (new MoveToProject)('observations', $from, $to, $userId);
+        return (new MoveToProject)($context, 'observations', $from, $to);
     }
 
     /**

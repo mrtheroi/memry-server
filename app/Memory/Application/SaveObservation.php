@@ -17,11 +17,10 @@ final class SaveObservation
 
         if ($observation->topicKey !== null) {
             $existing = $this->memories->findByTopicKey(
-                $observation->userId,
+                $context,
                 $observation->project,
                 $observation->scope,
                 $observation->topicKey,
-                $context->teamId,
             );
 
             if ($existing !== null) {

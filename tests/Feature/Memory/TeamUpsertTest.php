@@ -10,6 +10,7 @@ use App\Team\Domain\AccessContext;
 use App\Team\Domain\ProjectAccess;
 use App\Team\Domain\Role;
 use App\Team\Infrastructure\Persistence\TeamRecord;
+use App\Team\Infrastructure\Persistence\TeamUserRecord;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -74,24 +75,6 @@ test('a denied context never adopts a team row with the same topic_key', functio
         ->and(DB::table('observations')->where('id', $teamRow->id)->value('team_id'))->toBe($teamId);
 });
 
-test('adopting a legacy NULL-team row sets its team, created_by and updated_by', function () {
-    $user = User::factory()->create();
-    $teamId = TeamRecord::where('owner_id', $user->id)->value('id');
-    $legacy = (new EloquentMemoryRepository)->save(new Observation($user->id, 's', 'decision', 'T', 'old', 'dbmcp', 'project', 'k'));
-
-    app(SaveObservation::class)(
-        new Observation($user->id, 's', 'decision', 'T', 'new', 'dbmcp', 'project', 'k'),
-        AccessContext::forTeam($teamId, $user->id, Role::Owner, ProjectAccess::all()),
-    );
-
-    $row = DB::table('observations')->sole();
-    expect($row->id)->toBe($legacy->id)
-        ->and($row->team_id)->toBe($teamId)
-        ->and($row->created_by)->toBe($user->id)
-        ->and($row->updated_by)->toBe($user->id)
-        ->and($row->content)->toBe('new');
-});
-
 test('the repository hydrates the persisted team id on save and find', function () {
     $user = User::factory()->create();
     $teamId = TeamRecord::where('owner_id', $user->id)->value('id');
@@ -103,4 +86,41 @@ test('the repository hydrates the persisted team id on save and find', function 
     expect($saved->teamId)->toBe($teamId)
         ->and($repository->find(contextFor($user), $saved->id)->teamId)->toBe($teamId)
         ->and($repository->find(AccessContext::system(), $legacy->id)->teamId)->toBeNull();
+});
+
+function sharedTeamWithMember(): array
+{
+    $owner = User::factory()->create();
+    $team = TeamRecord::factory()->create(['owner_id' => $owner->id]);
+    $member = User::factory()->create();
+    TeamUserRecord::factory()->create(['team_id' => $team->id, 'user_id' => $member->id, 'role' => Role::Member]);
+    $context = fn (User $user, Role $role) => AccessContext::forTeam($team->id, $user->id, $role, ProjectAccess::all());
+
+    return [$owner, $member, $context($owner, Role::Owner), $context($member, Role::Member)];
+}
+
+test('two members saving the same project-scope topic_key leave one row, last write wins', function () {
+    [$owner, $member, $ownerContext, $memberContext] = sharedTeamWithMember();
+    $note = fn (User $author, string $content) => new Observation($author->id, 's', 'decision', 'T', $content, 'dbmcp', 'project', 'k');
+
+    app(SaveObservation::class)($note($owner, 'first'), $ownerContext);
+    app(SaveObservation::class)($note($member, 'second'), $memberContext);
+
+    $row = DB::table('observations')->sole();
+    expect($row->content)->toBe('second')
+        ->and($row->created_by)->toBe($owner->id)
+        ->and($row->updated_by)->toBe($member->id)
+        ->and($row->user_id)->toBe($owner->id);
+});
+
+test('two members saving the same personal-scope topic_key keep one row each', function () {
+    [$owner, $member, $ownerContext, $memberContext] = sharedTeamWithMember();
+    $note = fn (User $author, string $content) => new Observation($author->id, 's', 'decision', 'T', $content, 'dbmcp', 'personal', 'k');
+
+    app(SaveObservation::class)($note($owner, 'mine'), $ownerContext);
+    app(SaveObservation::class)($note($member, 'yours'), $memberContext);
+    app(SaveObservation::class)($note($member, 'yours again'), $memberContext);
+
+    expect(DB::table('observations')->orderBy('id')->pluck('content', 'user_id')->all())
+        ->toBe([$owner->id => 'mine', $member->id => 'yours again']);
 });

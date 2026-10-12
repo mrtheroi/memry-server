@@ -10,7 +10,7 @@ interface MemoryRepository
 
     public function find(AccessContext $context, int $id): ?Observation;
 
-    public function findByTopicKey(int $userId, ?string $project, string $scope, string $topicKey, ?int $teamId = null): ?Observation;
+    public function findByTopicKey(AccessContext $context, ?string $project, string $scope, string $topicKey): ?Observation;
 
     /**
      * @return list<Observation>
@@ -33,14 +33,14 @@ interface MemoryRepository
     public function recentWithoutTopicKey(AccessContext $context, string $project, int $limit): array;
 
     /**
-     * Count the observations of a project whose user already has the same
-     * topic key in another project. A null user counts every user.
+     * Count the observations of a project whose team already has the same
+     * topic key in another project. The system context counts every team.
      */
-    public function countTopicKeyCollisions(string $from, string $to, ?int $userId): int;
+    public function countTopicKeyCollisions(AccessContext $context, string $from, string $to): int;
 
     /**
      * Move observations to another project, returning how many were moved.
-     * A null user moves the rows of every user.
+     * The system context moves the rows of every team.
      */
-    public function moveToProject(string $from, string $to, ?int $userId): int;
+    public function moveToProject(AccessContext $context, string $from, string $to): int;
 }

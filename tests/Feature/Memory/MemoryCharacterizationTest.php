@@ -146,8 +146,8 @@ test('the topic key is scoped by scope, while search and context ignore the scop
     $repository = new EloquentMemoryRepository;
     $repository->save(observation($user, ['scope' => 'personal', 'title' => 'Personal sanctum note']));
 
-    expect($repository->findByTopicKey($user->id, 'dbmcp', 'project', 'architecture/auth', contextFor($user)->teamId))->toBeNull()
-        ->and($repository->findByTopicKey($user->id, 'dbmcp', 'personal', 'architecture/auth', contextFor($user)->teamId))->not->toBeNull()
+    expect($repository->findByTopicKey(contextFor($user), 'dbmcp', 'project', 'architecture/auth'))->toBeNull()
+        ->and($repository->findByTopicKey(contextFor($user), 'dbmcp', 'personal', 'architecture/auth'))->not->toBeNull()
         ->and(searchFor($user, 'sanctum'))->toHaveCount(1);
 
     app(SaveObservation::class)(observation($user, ['title' => 'Project note']), contextFor($user));

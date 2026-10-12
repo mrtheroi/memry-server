@@ -15,6 +15,7 @@ function prompt(User $user, string $content, string $project = 'dbmcp'): void
         sessionId: 'session-1',
         project: $project,
         content: $content,
+        teamId: contextFor($user)->teamId,
     ));
 }
 

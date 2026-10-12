@@ -3,6 +3,7 @@
 use App\Memory\Domain\Observation;
 use App\Memory\Infrastructure\Persistence\EloquentMemoryRepository;
 use App\Models\User;
+use App\Team\Domain\AccessContext;
 use App\Team\Infrastructure\Persistence\TeamRecord;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -21,7 +22,7 @@ test('moving a project issues exactly one statement so project creation and the 
     DB::listen(function ($query) use (&$statements) {
         $statements[] = $query->sql;
     });
-    $moved = $repository->moveToProject('old', 'new', null);
+    $moved = $repository->moveToProject(AccessContext::system(), 'old', 'new');
 
     expect($moved)->toBe(2)
         ->and($statements)->toHaveCount(1)

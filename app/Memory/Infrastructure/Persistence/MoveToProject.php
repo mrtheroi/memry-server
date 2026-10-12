@@ -2,6 +2,7 @@
 
 namespace App\Memory\Infrastructure\Persistence;
 
+use App\Team\Domain\AccessContext;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -14,10 +15,14 @@ final class MoveToProject
     /**
      * @param  'observations'|'user_prompts'  $table
      */
-    public function __invoke(string $table, string $from, string $to, ?int $userId): int
+    public function __invoke(AccessContext $context, string $table, string $from, string $to): int
     {
-        $filter = 'project = ?'.($userId ? ' AND user_id = ?' : '');
-        $bindings = $userId ? [$from, $userId] : [$from];
+        if ($context->isDenied()) {
+            return 0;
+        }
+
+        $filter = 'project = ?'.($context->isSystem() ? '' : ' AND team_id = ?');
+        $bindings = $context->isSystem() ? [$from] : [$from, $context->teamId];
         $now = now();
 
         // One statement: project creation and the row move share a snapshot, so a project
