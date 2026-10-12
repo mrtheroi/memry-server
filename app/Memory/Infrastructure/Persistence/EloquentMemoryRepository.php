@@ -5,6 +5,7 @@ namespace App\Memory\Infrastructure\Persistence;
 use App\Memory\Domain\MemoryRepository;
 use App\Memory\Domain\Observation;
 use App\Memory\Domain\ProjectRepository;
+use App\Team\Domain\AccessContext;
 use Illuminate\Database\Eloquent\Builder;
 
 final class EloquentMemoryRepository implements MemoryRepository
@@ -45,9 +46,13 @@ final class EloquentMemoryRepository implements MemoryRepository
         return $this->toDomain($record);
     }
 
-    public function find(int $id): ?Observation
+    public function find(AccessContext $context, int $id): ?Observation
     {
-        $record = ObservationRecord::find($id);
+        if ($context->isDenied()) {
+            return null;
+        }
+
+        $record = $this->scopeTo(ObservationRecord::where('id', $id), $context)->first();
 
         return $record ? $this->toDomain($record) : null;
     }
@@ -68,9 +73,13 @@ final class EloquentMemoryRepository implements MemoryRepository
         return $record ? $this->toDomain($record) : null;
     }
 
-    public function search(int $userId, string $query, int $limit, ?string $project = null): array
+    public function search(AccessContext $context, string $query, int $limit, ?string $project = null): array
     {
-        return ObservationRecord::where('user_id', $userId)
+        if ($context->isDenied()) {
+            return [];
+        }
+
+        return $this->scopeTo(ObservationRecord::query(), $context)
             ->when($project, fn ($builder) => $builder->where('project', $project))
             ->whereRaw("search_vector @@ websearch_to_tsquery('english', ?)", [$query])
             ->orderByRaw("ts_rank(search_vector, websearch_to_tsquery('english', ?)) DESC", [$query])
@@ -136,6 +145,20 @@ final class EloquentMemoryRepository implements MemoryRepository
     public function moveToProject(string $from, string $to, ?int $userId): int
     {
         return (new MoveToProject)('observations', $from, $to, $userId);
+    }
+
+    /**
+     * Tenant filter for reads: the context team, and for a project-restricted member only the
+     * granted projects (rows without a project are excluded, so it fails closed). System sees all.
+     */
+    private function scopeTo(Builder $builder, AccessContext $context): Builder
+    {
+        if ($context->isSystem()) {
+            return $builder;
+        }
+
+        return $builder->where('team_id', $context->teamId)
+            ->when(! $context->projects->isAll(), fn (Builder $scope) => $scope->whereIn('project_id', $context->projects->ids()));
     }
 
     private function withinTeam(Builder $builder, ?int $teamId): Builder

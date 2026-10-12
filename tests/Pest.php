@@ -3,6 +3,8 @@
 use App\Memory\Domain\Observation;
 use App\Memory\Infrastructure\Persistence\EloquentMemoryRepository;
 use App\Models\User;
+use App\Team\Domain\AccessContext;
+use App\Team\Domain\AccessContextResolver;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Mcp\Server\Testing\TestResponse;
 use PHPUnit\Framework\Assert;
@@ -81,14 +83,21 @@ TestResponse::macro('assertExactError', function (string $text) {
  * Thin wrappers over the repositories, so a later slice that changes their
  * signatures only touches these helpers, never the test bodies.
  */
-function contextFor(User $user): int
+function contextFor(User $user): AccessContext
 {
-    return $user->id;
+    return app(AccessContextResolver::class)->resolve($user);
 }
 
+/*
+ * Characterization tests save through the repository without a team, so they read back as
+ * legacy rows: system context, narrowed to the user, as the reads were before team scoping.
+ * Tenant isolation is covered with real contexts in ScopedReadsTest.
+ */
 function recall(User $user, int $id): ?Observation
 {
-    return (new EloquentMemoryRepository)->find($id);
+    $found = (new EloquentMemoryRepository)->find(AccessContext::system(), $id);
+
+    return $found?->userId === $user->id ? $found : null;
 }
 
 /**
@@ -96,7 +105,9 @@ function recall(User $user, int $id): ?Observation
  */
 function searchFor(User $user, string $query, int $limit = 10, ?string $project = null): array
 {
-    return (new EloquentMemoryRepository)->search(contextFor($user), $query, $limit, $project);
+    $found = (new EloquentMemoryRepository)->search(AccessContext::system(), $query, PHP_INT_MAX, $project);
+
+    return array_slice(array_values(array_filter($found, fn (Observation $o) => $o->userId === $user->id)), 0, $limit);
 }
 
 function remember(User $user, string $title, string $content, string $project = 'dbmcp', string $type = 'decision', ?string $topicKey = null): Observation
@@ -110,5 +121,6 @@ function remember(User $user, string $title, string $content, string $project = 
         project: $project,
         scope: 'project',
         topicKey: $topicKey,
+        teamId: contextFor($user)->teamId,
     ));
 }

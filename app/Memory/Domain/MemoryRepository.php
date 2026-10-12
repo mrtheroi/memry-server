@@ -2,18 +2,20 @@
 
 namespace App\Memory\Domain;
 
+use App\Team\Domain\AccessContext;
+
 interface MemoryRepository
 {
     public function save(Observation $observation): Observation;
 
-    public function find(int $id): ?Observation;
+    public function find(AccessContext $context, int $id): ?Observation;
 
     public function findByTopicKey(int $userId, ?string $project, string $scope, string $topicKey, ?int $teamId = null): ?Observation;
 
     /**
      * @return list<Observation>
      */
-    public function search(int $userId, string $query, int $limit, ?string $project = null): array;
+    public function search(AccessContext $context, string $query, int $limit, ?string $project = null): array;
 
     /**
      * @return list<Observation>
