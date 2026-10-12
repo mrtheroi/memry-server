@@ -19,6 +19,7 @@ final readonly class Observation
         public ?string $topicKey,
         public ?int $id = null,
         public ?DateTimeImmutable $updatedAt = null,
+        public ?int $teamId = null,
     ) {
         $this->project = ProjectName::normalize($project);
     }
@@ -35,6 +36,7 @@ final readonly class Observation
             scope: $this->scope,
             topicKey: $this->topicKey,
             id: $id,
+            teamId: $this->teamId,
         );
     }
 }

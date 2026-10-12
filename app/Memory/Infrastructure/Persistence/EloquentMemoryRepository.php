@@ -4,12 +4,16 @@ namespace App\Memory\Infrastructure\Persistence;
 
 use App\Memory\Domain\MemoryRepository;
 use App\Memory\Domain\Observation;
+use App\Memory\Domain\ProjectRepository;
 
 final class EloquentMemoryRepository implements MemoryRepository
 {
+    public function __construct(private ProjectRepository $projects = new QueryProjectRepository) {}
+
     public function save(Observation $observation): Observation
     {
-        $record = ObservationRecord::updateOrCreate(['id' => $observation->id], [
+        $record = ObservationRecord::firstOrNew(['id' => $observation->id]);
+        $record->fill([
             'user_id' => $observation->userId,
             'session_id' => $observation->sessionId,
             'type' => $observation->type,
@@ -19,6 +23,22 @@ final class EloquentMemoryRepository implements MemoryRepository
             'scope' => $observation->scope,
             'topic_key' => $observation->topicKey,
         ]);
+
+        if ($observation->teamId !== null) {
+            $record->fill([
+                'team_id' => $observation->teamId,
+                'project_id' => $observation->project === null
+                    ? null
+                    : $this->projects->getOrCreateId($observation->teamId, $observation->project),
+                'updated_by' => $observation->userId,
+            ]);
+
+            if (! $record->exists) {
+                $record->created_by = $observation->userId;
+            }
+        }
+
+        $record->save();
 
         return $this->toDomain($record);
     }
@@ -108,10 +128,7 @@ final class EloquentMemoryRepository implements MemoryRepository
 
     public function moveToProject(string $from, string $to, ?int $userId): int
     {
-        return ObservationRecord::where('project', $from)
-            ->when($userId, fn ($builder) => $builder->where('user_id', $userId))
-            ->toBase()
-            ->update(['project' => $to]);
+        return (new MoveToProject)('observations', $from, $to, $userId);
     }
 
     private function toDomain(ObservationRecord $record): Observation

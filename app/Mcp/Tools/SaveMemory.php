@@ -4,6 +4,7 @@ namespace App\Mcp\Tools;
 
 use App\Memory\Application\SaveObservation;
 use App\Memory\Domain\Observation;
+use App\Team\Domain\AccessContext;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\JsonSchema\Types\Type;
 use Laravel\Mcp\Request;
@@ -17,7 +18,7 @@ class SaveMemory extends Tool
     /**
      * Handle the tool request.
      */
-    public function handle(Request $request, SaveObservation $saveObservation): Response
+    public function handle(Request $request, SaveObservation $saveObservation, AccessContext $context): Response
     {
         $request->validate([
             'session_id' => ['required', 'max:255'],
@@ -37,6 +38,7 @@ class SaveMemory extends Tool
             project: $request->get('project'),
             scope: 'project',
             topicKey: $request->get('topic_key'),
+            teamId: $context->teamId,
         ));
 
         return Response::text("Memory saved with id {$observation->id}.");

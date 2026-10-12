@@ -11,6 +11,7 @@ final readonly class UserPrompt
         public string $sessionId,
         ?string $project,
         public string $content,
+        public ?int $teamId = null,
     ) {
         $this->project = ProjectName::normalize($project);
     }

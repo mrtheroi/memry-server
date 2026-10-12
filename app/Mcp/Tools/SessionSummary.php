@@ -4,6 +4,7 @@ namespace App\Mcp\Tools;
 
 use App\Memory\Application\SaveObservation;
 use App\Memory\Domain\Observation;
+use App\Team\Domain\AccessContext;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\JsonSchema\Types\Type;
 use Illuminate\Support\Str;
@@ -18,7 +19,7 @@ class SessionSummary extends Tool
     /**
      * Handle the tool request.
      */
-    public function handle(Request $request, SaveObservation $saveObservation): Response
+    public function handle(Request $request, SaveObservation $saveObservation, AccessContext $context): Response
     {
         $request->validate([
             'session_id' => ['required', 'max:255'],
@@ -40,6 +41,7 @@ class SessionSummary extends Tool
             project: $project,
             scope: 'project',
             topicKey: null,
+            teamId: $context->teamId,
         ));
 
         return Response::text('Session summary saved.');

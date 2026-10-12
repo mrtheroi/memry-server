@@ -4,6 +4,7 @@ namespace App\Mcp\Tools;
 
 use App\Memory\Domain\PromptRepository;
 use App\Memory\Domain\UserPrompt;
+use App\Team\Domain\AccessContext;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\JsonSchema\Types\Type;
 use Laravel\Mcp\Request;
@@ -17,7 +18,7 @@ class SavePrompt extends Tool
     /**
      * Handle the tool request.
      */
-    public function handle(Request $request, PromptRepository $prompts): Response
+    public function handle(Request $request, PromptRepository $prompts, AccessContext $context): Response
     {
         $request->validate([
             'session_id' => ['required', 'max:255'],
@@ -30,6 +31,7 @@ class SavePrompt extends Tool
             sessionId: $request->get('session_id'),
             project: $request->get('project'),
             content: $request->get('content'),
+            teamId: $context->teamId,
         ));
 
         return Response::text('Prompt saved.');
