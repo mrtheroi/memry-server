@@ -120,9 +120,14 @@ final class EloquentMemoryRepository implements MemoryRepository
         return ObservationRecord::where('project', $from)
             ->when(! $context->isSystem(), fn ($builder) => $builder->where('team_id', $context->teamId))
             ->whereNotNull('topic_key')
+            // The same identity findByTopicKey() upserts on: team, scope and
+            // topic_key, plus the author for personal scope.
             ->whereExists(fn ($query) => $query->from('observations as target')
                 ->whereColumn('target.team_id', 'observations.team_id')
+                ->whereColumn('target.scope', 'observations.scope')
                 ->whereColumn('target.topic_key', 'observations.topic_key')
+                ->where(fn ($author) => $author->where('observations.scope', '<>', 'personal')
+                    ->orWhereColumn('target.user_id', 'observations.user_id'))
                 ->where('target.project', $to))
             ->count();
     }

@@ -1,10 +1,13 @@
 <?php
 
+use App\Memory\Domain\Observation;
 use App\Memory\Domain\UserPrompt;
 use App\Memory\Infrastructure\Persistence\EloquentMemoryRepository;
 use App\Memory\Infrastructure\Persistence\EloquentPromptRepository;
 use App\Models\User;
 use App\Team\Domain\AccessContext;
+use App\Team\Domain\Role;
+use App\Team\Infrastructure\Persistence\TeamUserRecord;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 
@@ -77,4 +80,27 @@ test('--email merges only that user\'s personal team and leaves a shared team of
     expect(DB::table('observations')->where('title', 'Shared')->value('project'))->toBe('old')
         ->and(DB::table('observations')->where('title', 'Personal')->value('project_id'))
         ->toBe(DB::table('projects')->where('team_id', contextFor($ada)->teamId)->where('name', 'new')->value('id'));
+});
+
+test('collisions follow the topic_key identity: scope, and the author for personal scope', function () {
+    $owner = User::factory()->create();
+    $member = User::factory()->create();
+    $team = contextFor($owner)->teamId;
+    TeamUserRecord::factory()->create(['team_id' => $team, 'user_id' => $member->id, 'role' => Role::Member]);
+    $repository = new EloquentMemoryRepository;
+    $save = fn (User $author, string $project, string $scope) => $repository->save(new Observation(
+        $author->id, 's', 'decision', 'T', 'C', $project, $scope, 'k', teamId: $team,
+    ));
+
+    $save($owner, 'old', 'project');
+    $save($owner, 'new', 'personal');
+    $save($member, 'old', 'personal');
+    $save($owner, 'new', 'personal');
+
+    // old/project vs new/personal: different scope. old/personal (member) vs new/personal (owner): different author.
+    expect($repository->countTopicKeyCollisions(contextFor($owner), 'old', 'new'))->toBe(0);
+
+    $save($member, 'new', 'personal');
+
+    expect($repository->countTopicKeyCollisions(contextFor($owner), 'old', 'new'))->toBe(1);
 });
