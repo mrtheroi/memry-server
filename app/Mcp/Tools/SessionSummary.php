@@ -42,7 +42,7 @@ class SessionSummary extends Tool
             scope: 'project',
             topicKey: null,
             teamId: $context->teamId,
-        ));
+        ), $context);
 
         return Response::text('Session summary saved.');
     }

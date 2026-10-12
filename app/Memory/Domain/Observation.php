@@ -24,6 +24,22 @@ final readonly class Observation
         $this->project = ProjectName::normalize($project);
     }
 
+    public function withTeamId(?int $teamId): self
+    {
+        return new self(
+            userId: $this->userId,
+            sessionId: $this->sessionId,
+            type: $this->type,
+            title: $this->title,
+            content: $this->content,
+            project: $this->project,
+            scope: $this->scope,
+            topicKey: $this->topicKey,
+            id: $this->id,
+            teamId: $teamId,
+        );
+    }
+
     public function withId(int $id): self
     {
         return new self(

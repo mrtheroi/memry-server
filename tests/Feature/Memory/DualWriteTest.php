@@ -10,6 +10,9 @@ use App\Memory\Domain\UserPrompt;
 use App\Memory\Infrastructure\Persistence\EloquentMemoryRepository;
 use App\Memory\Infrastructure\Persistence\EloquentPromptRepository;
 use App\Models\User;
+use App\Team\Domain\AccessContext;
+use App\Team\Domain\ProjectAccess;
+use App\Team\Domain\Role;
 use App\Team\Infrastructure\Persistence\TeamRecord;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -55,9 +58,11 @@ test('a topic_key upsert sets updated_by and never changes created_by', function
     $teamId = personalTeamId($user);
     $observation = fn (string $content) => new Observation($user->id, 's', 'decision', 'T', $content, 'dbmcp', 'project', 'k', teamId: $teamId);
 
-    $created = $save($observation('v1'));
+    $context = AccessContext::forTeam($teamId, $user->id, Role::Owner, ProjectAccess::all());
+
+    $created = $save($observation('v1'), $context);
     DB::table('observations')->where('id', $created->id)->update(['created_by' => $other->id, 'updated_by' => $other->id]);
-    $save($observation('v2'));
+    $save($observation('v2'), $context);
 
     $row = DB::table('observations')->sole();
     expect($row->created_by)->toBe($other->id)
@@ -69,11 +74,12 @@ test('an identical re-save leaves updated_at untouched', function () {
     $user = User::factory()->create();
     $save = app(SaveObservation::class);
     $observation = new Observation($user->id, 's', 'decision', 'T', 'v1', ' Alpha ', 'project', 'k', teamId: personalTeamId($user));
+    $context = AccessContext::forTeam(personalTeamId($user), $user->id, Role::Owner, ProjectAccess::all());
 
     $this->travelTo('2026-09-01 10:00:00');
-    $save($observation);
+    $save($observation, $context);
     $this->travelTo('2026-09-02 10:00:00');
-    $save($observation);
+    $save($observation, $context);
 
     expect(DB::table('observations')->sole()->updated_at)->toBe('2026-09-01 10:00:00');
 });

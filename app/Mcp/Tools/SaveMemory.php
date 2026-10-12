@@ -39,7 +39,7 @@ class SaveMemory extends Tool
             scope: 'project',
             topicKey: $request->get('topic_key'),
             teamId: $context->teamId,
-        ));
+        ), $context);
 
         return Response::text("Memory saved with id {$observation->id}.");
     }

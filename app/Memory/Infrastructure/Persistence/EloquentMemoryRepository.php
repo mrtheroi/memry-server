@@ -5,6 +5,7 @@ namespace App\Memory\Infrastructure\Persistence;
 use App\Memory\Domain\MemoryRepository;
 use App\Memory\Domain\Observation;
 use App\Memory\Domain\ProjectRepository;
+use Illuminate\Database\Eloquent\Builder;
 
 final class EloquentMemoryRepository implements MemoryRepository
 {
@@ -12,7 +13,9 @@ final class EloquentMemoryRepository implements MemoryRepository
 
     public function save(Observation $observation): Observation
     {
-        $record = ObservationRecord::firstOrNew(['id' => $observation->id]);
+        $record = $observation->id === null
+            ? new ObservationRecord
+            : $this->withinTeam(ObservationRecord::where('id', $observation->id), $observation->teamId)->firstOrFail();
         $record->fill([
             'user_id' => $observation->userId,
             'session_id' => $observation->sessionId,
@@ -33,9 +36,8 @@ final class EloquentMemoryRepository implements MemoryRepository
                 'updated_by' => $observation->userId,
             ]);
 
-            if (! $record->exists) {
-                $record->created_by = $observation->userId;
-            }
+            // a new row, or a legacy row being adopted, is authored by its owner
+            $record->created_by ??= $observation->userId;
         }
 
         $record->save();
@@ -50,12 +52,17 @@ final class EloquentMemoryRepository implements MemoryRepository
         return $record ? $this->toDomain($record) : null;
     }
 
-    public function findByTopicKey(int $userId, ?string $project, string $scope, string $topicKey): ?Observation
+    /**
+     * With a team, matches that team's rows first and then the user's still-unowned legacy rows
+     * (adopted on save); never another team's. Without a team, matches legacy rows only.
+     */
+    public function findByTopicKey(int $userId, ?string $project, string $scope, string $topicKey, ?int $teamId = null): ?Observation
     {
-        $record = ObservationRecord::where('user_id', $userId)
+        $record = $this->withinTeam(ObservationRecord::where('user_id', $userId), $teamId)
             ->where('project', $project)
             ->where('scope', $scope)
             ->where('topic_key', $topicKey)
+            ->orderByRaw('team_id IS NULL')
             ->first();
 
         return $record ? $this->toDomain($record) : null;
@@ -131,6 +138,12 @@ final class EloquentMemoryRepository implements MemoryRepository
         return (new MoveToProject)('observations', $from, $to, $userId);
     }
 
+    private function withinTeam(Builder $builder, ?int $teamId): Builder
+    {
+        return $builder->where(fn (Builder $scope) => $scope->whereNull('team_id')
+            ->when($teamId !== null, fn (Builder $scope) => $scope->orWhere('team_id', $teamId)));
+    }
+
     private function toDomain(ObservationRecord $record): Observation
     {
         return new Observation(
@@ -144,6 +157,7 @@ final class EloquentMemoryRepository implements MemoryRepository
             topicKey: $record->topic_key,
             id: $record->id,
             updatedAt: $record->updated_at?->toDateTimeImmutable(),
+            teamId: $record->team_id,
         );
     }
 }

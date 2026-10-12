@@ -20,18 +20,25 @@ final class MoveToProject
         $bindings = $userId ? [$from, $userId] : [$from];
         $now = now();
 
-        DB::statement(
-            "INSERT INTO projects (team_id, name, created_at, updated_at)
-             SELECT DISTINCT team_id, ?::text, ?::timestamp, ?::timestamp FROM {$table} WHERE {$filter} AND team_id IS NOT NULL
-             ON CONFLICT (team_id, name) DO NOTHING",
-            [$to, $now, $now, ...$bindings],
-        );
-
+        // One statement: project creation and the row move share a snapshot, so a project
+        // created concurrently cannot slip between them. A data-modifying CTE exposes its
+        // inserted rows only through RETURNING, hence the COALESCE with the existing project.
         return DB::update(
-            "UPDATE {$table} SET project = ?,
-             project_id = (SELECT p.id FROM projects p WHERE p.team_id = {$table}.team_id AND p.name = ?)
+            "WITH src AS (
+                 SELECT DISTINCT team_id FROM {$table} WHERE {$filter} AND team_id IS NOT NULL
+             ), ins AS (
+                 INSERT INTO projects (team_id, name, created_at, updated_at)
+                 SELECT team_id, ?::text, ?::timestamp, ?::timestamp FROM src
+                 ON CONFLICT (team_id, name) DO NOTHING
+                 RETURNING id, team_id
+             )
+             UPDATE {$table} AS t SET project = ?::text,
+             project_id = COALESCE(
+                 (SELECT ins.id FROM ins WHERE ins.team_id = t.team_id),
+                 (SELECT p.id FROM projects p WHERE p.team_id = t.team_id AND p.name = ?::text)
+             )
              WHERE {$filter}",
-            [$to, $to, ...$bindings],
+            [...$bindings, $to, $now, $now, $to, $to, ...$bindings],
         );
     }
 }
