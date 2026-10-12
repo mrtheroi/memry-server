@@ -195,7 +195,7 @@ Agents send bearer tokens on every request, so do not expose the server over pla
 
 ## Upgrades
 
-Read the [CHANGELOG](../CHANGELOG.md) first, then run migrations after updating the image. Upgrading from a release before teams, the migration also creates a personal team for every user and assigns it to their existing memories, prompts and tokens; no separate step is needed.
+Read the [CHANGELOG](../CHANGELOG.md) first, then run migrations after updating the image. Upgrading from a release before teams, the migration also creates a personal team for every user and assigns it to their existing memories, prompts and tokens; no separate step is needed. When upgrading from a release before teams, stop the app (`docker compose stop app scheduler`) before running the migration, so the old version does not keep writing while it runs. The new `app` container also runs `php artisan memory:backfill-teams` on start, before it serves requests, so any rows the old app wrote during the upgrade still get their team. To verify, run `docker compose run --rm app memory:backfill-teams --check`: it exits 0 when nothing is missing.
 
 With the published image, set `MEMRY_IMAGE` in `.env` to the new release and pull it. Download that release's `docker-compose.yml` and `community.env.example` again and compare them with your copies, since new settings can appear:
 

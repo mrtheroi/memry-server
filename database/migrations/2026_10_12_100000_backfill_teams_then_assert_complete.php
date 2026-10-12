@@ -7,6 +7,12 @@ use Illuminate\Support\Facades\DB;
 return new class extends Migration
 {
     /**
+     * BackfillTeams commits per user; a wrapping migration transaction would turn that into one
+     * long transaction holding every lock until the end and losing all progress on failure.
+     */
+    public $withinTransaction = false;
+
+    /**
      * Team-scoped reads hide rows without a team, so this migration fills every row (idempotent,
      * chunked, per-user locks) and then asserts none is left.
      *
