@@ -101,6 +101,6 @@ test('the repository hydrates the persisted team id on save and find', function 
     $legacy = $repository->save(new Observation($user->id, 's', 'decision', 'T', 'C', 'dbmcp', 'project', null));
 
     expect($saved->teamId)->toBe($teamId)
-        ->and($repository->find($saved->id)->teamId)->toBe($teamId)
-        ->and($repository->find($legacy->id)->teamId)->toBeNull();
+        ->and($repository->find(contextFor($user), $saved->id)->teamId)->toBe($teamId)
+        ->and($repository->find(AccessContext::system(), $legacy->id)->teamId)->toBeNull();
 });

@@ -10,9 +10,8 @@ final class SaveObservation
 {
     public function __construct(private MemoryRepository $memories, private ?AuthorizeProjectWrite $authorize = null) {}
 
-    public function __invoke(Observation $observation, ?AccessContext $context = null): Observation
+    public function __invoke(Observation $observation, AccessContext $context): Observation
     {
-        $context ??= AccessContext::denied($observation->userId);
         ($this->authorize ?? app(AuthorizeProjectWrite::class))($context, $observation->project);
         $observation = $observation->withTeamId($context->teamId);
 

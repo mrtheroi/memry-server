@@ -32,6 +32,12 @@ migrate() {
     php artisan migrate --force --isolated
 }
 
+# Self-healing: an older app still running during an upgrade can write rows
+# without a team after the migration. Idempotent; exits 0 when nothing is left.
+backfill_teams() {
+    php artisan memory:backfill-teams --no-interaction
+}
+
 is_true() {
     case "$(echo "${1:-}" | tr '[:upper:]' '[:lower:]')" in
         1 | true | yes | on) return 0 ;;
@@ -51,6 +57,7 @@ case "$command" in
         if is_true "${AUTO_MIGRATE:-false}"; then
             migrate
         fi
+        backfill_teams
         php artisan config:cache
         php artisan route:cache
         php artisan view:cache

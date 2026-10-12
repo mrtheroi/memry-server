@@ -23,7 +23,7 @@ test('it returns the get-context text of the project as plain text', function ()
     $response->assertOk()
         ->assertHeader('Content-Type', 'text/plain; charset=UTF-8')
         ->assertSee(['## Recent sessions', '## Project knowledge', '## Recent memories']);
-    expect($response->getContent())->toBe(app(BuildProjectContext::class)($user->id, 'dbmcp'));
+    expect($response->getContent())->toBe(app(BuildProjectContext::class)(contextFor($user), 'dbmcp'));
 });
 
 test('it never returns the memories of another user', function () {

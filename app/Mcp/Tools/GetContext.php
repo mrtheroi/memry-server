@@ -3,6 +3,7 @@
 namespace App\Mcp\Tools;
 
 use App\Memory\Application\BuildProjectContext;
+use App\Team\Domain\AccessContext;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\JsonSchema\Types\Type;
 use Laravel\Mcp\Request;
@@ -16,13 +17,13 @@ class GetContext extends Tool
     /**
      * Handle the tool request.
      */
-    public function handle(Request $request, BuildProjectContext $buildContext): Response
+    public function handle(Request $request, BuildProjectContext $buildContext, AccessContext $context): Response
     {
         $request->validate([
             'project' => ['required', 'max:255'],
         ]);
 
-        return Response::text($buildContext($request->user()->id, $request->get('project')));
+        return Response::text($buildContext($context, $request->get('project')));
     }
 
     /**

@@ -3,6 +3,7 @@
 namespace App\Mcp\Tools;
 
 use App\Memory\Domain\MemoryRepository;
+use App\Team\Domain\AccessContext;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\JsonSchema\Types\Type;
 use Laravel\Mcp\Request;
@@ -16,15 +17,15 @@ class GetMemory extends Tool
     /**
      * Handle the tool request.
      */
-    public function handle(Request $request, MemoryRepository $memories): Response
+    public function handle(Request $request, MemoryRepository $memories, AccessContext $context): Response
     {
         $request->validate([
             'id' => ['required', 'integer', 'min:1'],
         ]);
 
-        $observation = $memories->find((int) $request->get('id'));
+        $observation = $memories->find($context, (int) $request->get('id'));
 
-        if ($observation?->userId !== $request->user()->id) {
+        if ($observation === null) {
             return Response::text('Memory not found.');
         }
 

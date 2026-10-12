@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Team backfill migration**: it no longer runs inside one wrapping transaction (`$withinTransaction = false`), so the per-user backfill commits as it goes, holds short locks and can be resumed after a failure
+- **Upgrades from a release before teams**: the `app` container now runs `memory:backfill-teams` on start, before serving, so rows written by the old app during the upgrade get their team; it is idempotent and exits 0 when nothing is left. `docs/self-hosting.md` recommends stopping the app before migrating
+
+---
+
 ## [0.18.1] - 2026-10-04
 
 ### Fixed

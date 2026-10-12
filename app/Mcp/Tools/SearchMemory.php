@@ -5,6 +5,7 @@ namespace App\Mcp\Tools;
 use App\Memory\Domain\MemoryRepository;
 use App\Memory\Domain\Observation;
 use App\Memory\Domain\ProjectName;
+use App\Team\Domain\AccessContext;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\JsonSchema\Types\Type;
 use Laravel\Mcp\Request;
@@ -18,7 +19,7 @@ class SearchMemory extends Tool
     /**
      * Handle the tool request.
      */
-    public function handle(Request $request, MemoryRepository $memories): Response
+    public function handle(Request $request, MemoryRepository $memories, AccessContext $context): Response
     {
         $request->validate([
             'query' => ['max:255'],
@@ -27,7 +28,7 @@ class SearchMemory extends Tool
         ]);
 
         $results = $memories->search(
-            $request->user()->id,
+            $context,
             $request->get('query'),
             (int) $request->get('limit', 10),
             ProjectName::normalize($request->get('project')),

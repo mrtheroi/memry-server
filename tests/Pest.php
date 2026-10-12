@@ -3,6 +3,9 @@
 use App\Memory\Domain\Observation;
 use App\Memory\Infrastructure\Persistence\EloquentMemoryRepository;
 use App\Models\User;
+use App\Team\Domain\AccessContext;
+use App\Team\Domain\AccessContextResolver;
+use App\Team\Infrastructure\Persistence\TeamRecord;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Mcp\Server\Testing\TestResponse;
 use PHPUnit\Framework\Assert;
@@ -81,14 +84,19 @@ TestResponse::macro('assertExactError', function (string $text) {
  * Thin wrappers over the repositories, so a later slice that changes their
  * signatures only touches these helpers, never the test bodies.
  */
-function contextFor(User $user): int
+function contextFor(User $user): AccessContext
 {
-    return $user->id;
+    return app(AccessContextResolver::class)->resolve($user);
 }
 
+/*
+ * Characterization tests save through the repository without a team, so they read back as
+ * legacy rows: system context, narrowed to the user, as the reads were before team scoping.
+ * Tenant isolation is covered with real contexts in ScopedReadsTest.
+ */
 function recall(User $user, int $id): ?Observation
 {
-    return (new EloquentMemoryRepository)->find($id);
+    return (new EloquentMemoryRepository)->find(contextFor($user), $id);
 }
 
 /**
@@ -110,5 +118,19 @@ function remember(User $user, string $title, string $content, string $project = 
         project: $project,
         scope: 'project',
         topicKey: $topicKey,
+        teamId: contextFor($user)->teamId,
     ));
+}
+
+function teamMemory(int $teamId, User $author, string $title, string $project = 'dbmcp'): Observation
+{
+    return (new EloquentMemoryRepository)->save(new Observation(
+        userId: $author->id, sessionId: 's', type: 'decision', title: $title, content: 'sanctum content',
+        project: $project, scope: 'project', topicKey: null, teamId: $teamId,
+    ));
+}
+
+function sharedTeamOf(User $user): int
+{
+    return TeamRecord::factory()->create(['owner_id' => $user->id])->id;
 }
