@@ -51,7 +51,7 @@ if [ "${1:-}" = compose ]; then
     set -- compose "$@"
     echo "compose flags:${flags}" >> "$STUB_LOG"
     # `compose version` (the preflight) reads no project.
-    [ "${2:-}" = version ] || echo "compose env: COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME-unset} DB_PASSWORD=${DB_PASSWORD-unset} APP_PORT=${APP_PORT-unset} REGISTRY=${REGISTRY-unset} DOCKER_CONTEXT=${DOCKER_CONTEXT-unset} AWS_PROFILE=${AWS_PROFILE-unset}" >> "$STUB_LOG"
+    [ "${2:-}" = version ] || echo "compose env: COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME-unset} DB_PASSWORD=${DB_PASSWORD-unset} APP_PORT=${APP_PORT-unset} REGISTRY=${REGISTRY-unset} DOCKER_CONTEXT=${DOCKER_CONTEXT-unset} AWS_PROFILE=${AWS_PROFILE-unset} MEMRY_IMAGE=${MEMRY_IMAGE-unset}" >> "$STUB_LOG"
 fi
 echo "docker $* @ $(pwd)" >> "$STUB_LOG"
 case "$*" in
@@ -62,10 +62,22 @@ case "$*" in
         echo "pull env: AWS_PROFILE=${AWS_PROFILE-unset} REGISTRY=${REGISTRY-unset}" >> "$STUB_LOG"
         exit "${STUB_PULL_STATUS:-0}"
         ;;
+    "image inspect --format {{.Id}}"*)
+        # The image ID: STUB_IMAGE_ID.
+        echo "${STUB_IMAGE_ID:-sha256:0123456789abcdef0123456789abcdef}"
+        exit 0
+        ;;
+    "image inspect --format"*)
+        # Digest references of the local image: STUB_REPO_DIGESTS, space
+        # separated, one per line (none: a locally built image).
+        for digest in ${STUB_REPO_DIGESTS:-}; do echo "$digest"; done
+        exit 0
+        ;;
     "image inspect"*)
         if [ -n "${STUB_LOCAL_IMAGE:-}" ]; then [ "${3:-}" = "$STUB_LOCAL_IMAGE" ] || [ "${3:-}" = postgres:16-alpine ]; exit $?; fi
         exit "${STUB_IMAGE_STATUS:-0}"
         ;;
+    "tag "*) exit "${STUB_TAG_STATUS:-0}" ;;
     "compose config --images")
         # The images Compose resolved: STUB_APP_IMAGE, or MEMRY_IMAGE in .env,
         # then PostgreSQL.
@@ -180,7 +192,7 @@ setup_test() {
     unset STUB_DAEMON_STATUS STUB_COMPOSE_VERSION STUB_COMPOSE_STATUS STUB_PULL_STATUS \
         STUB_IMAGE_STATUS STUB_TOKEN STUB_UP_STATUS STUB_MEMRY_VERSION STUB_SETUP_STATUS \
         STUB_CURL_FAIL STUB_VOLUME_STATUS STUB_EXISTING_VOLUME STUB_CLOCK_STEP STUB_PUBLISHED_PORT \
-        STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_NO_TOKEN STUB_CONTEXT_HOST
+        STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_NO_TOKEN STUB_CONTEXT_HOST STUB_REPO_DIGESTS STUB_IMAGE_ID STUB_TAG_STATUS
     stub_docker
     stub_curl
     stub_memry
@@ -194,7 +206,7 @@ run_install() {
     stub_value=""
     for stub_var in STUB_LOG STUB_SOURCE STUB_DAEMON_STATUS STUB_COMPOSE_VERSION STUB_COMPOSE_STATUS \
         STUB_PULL_STATUS STUB_IMAGE_STATUS STUB_TOKEN STUB_NO_TOKEN STUB_VOLUME_STATUS \
-        STUB_EXISTING_VOLUME STUB_PUBLISHED_PORT STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_CONTEXT_HOST; do
+        STUB_EXISTING_VOLUME STUB_PUBLISHED_PORT STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_CONTEXT_HOST STUB_REPO_DIGESTS STUB_IMAGE_ID STUB_TAG_STATUS; do
         eval "stub_value=\${$stub_var-}"
         printf "%s='%s'; export %s\n" "$stub_var" "$stub_value" "$stub_var"
     done > "${STUBS}/docker.env"
@@ -217,6 +229,9 @@ run_install() {
         ${STUB_LOCAL_IMAGE:+STUB_LOCAL_IMAGE="$STUB_LOCAL_IMAGE"} \
         ${STUB_APP_IMAGE:+STUB_APP_IMAGE="$STUB_APP_IMAGE"} \
         ${STUB_NO_TOKEN:+STUB_NO_TOKEN="$STUB_NO_TOKEN"} \
+        ${STUB_REPO_DIGESTS:+STUB_REPO_DIGESTS="$STUB_REPO_DIGESTS"} \
+        ${STUB_IMAGE_ID:+STUB_IMAGE_ID="$STUB_IMAGE_ID"} \
+        ${STUB_TAG_STATUS:+STUB_TAG_STATUS="$STUB_TAG_STATUS"} \
         ${STUB_CONTEXT_HOST:+STUB_CONTEXT_HOST="$STUB_CONTEXT_HOST"} \
         ${STUB_CLOCK_STEP:+STUB_CLOCK_STEP="$STUB_CLOCK_STEP"} \
         ${MEMRY_VERSION_OVERRIDE:+MEMRY_VERSION="$MEMRY_VERSION_OVERRIDE"} \
@@ -418,10 +433,10 @@ test_starts_the_server_in_the_directory() {
     assert_status 0
     assert_log_contains "docker pull ghcr.io/mrtheroi/memry-server:0.18.1 @ ${DIR}"
     assert_log_contains "docker pull postgres:16-alpine @ ${DIR}"
-    assert_log_contains "docker compose run --pull never --rm migrate @ ${DIR}"
-    assert_log_contains "docker compose up --pull never -d app scheduler @ ${DIR}"
+    assert_log_contains "docker compose run --rm migrate @ ${DIR}"
+    assert_log_contains "docker compose up -d app scheduler @ ${DIR}"
     assert_log_contains "http://localhost:8000/up"
-    order="$(grep -n -e 'docker pull' -e 'run --pull never --rm migrate' -e 'up --pull never -d app' -e '/up' "$STUB_LOG" | cut -d: -f1 | xargs)"
+    order="$(grep -n -e 'docker pull' -e 'run --rm migrate' -e 'up -d app' -e '/up' "$STUB_LOG" | cut -d: -f1 | xargs)"
     [ "$order" = "$(echo "$order" | tr ' ' '\n' | sort -n | xargs)" ] || fail "steps out of order: $order"
 }
 
@@ -437,8 +452,104 @@ test_pulls_resolved_images_with_the_callers_environment() {
     assert_log_contains "pull env: AWS_PROFILE=ecr"
     assert_log_not_contains "docker pull evil.example"
     assert_log_not_contains "compose pull"
-    assert_log_contains "docker compose up --pull never"
-    assert_log_contains "docker compose run --pull never --rm -T app token"
+    assert_log_contains "docker compose up"
+    assert_log_contains "docker compose run --rm -T app token"
+}
+
+# `docker compose run --pull` only exists since Compose v2.32.2 (`up --pull`
+# since ~v2.10): the installer never passes it.
+test_compose_commands_work_on_older_compose_v2() {
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    assert_log_not_contains "--pull"
+}
+
+# The env line of every Compose `up`/`run` call (the stub logs it just before
+# the command).
+compose_env_of_up_and_run() {
+    awk '/^compose env:/ { env = $0; next } /^docker compose (up|run) / { print env }' "$STUB_LOG"
+}
+
+# Compose re-pulls an untagged or :latest image even with the `missing` policy,
+# so after pulling, the installer runs Compose with the digest it pulled: a
+# digest reference is local and never "latest".
+test_compose_runs_the_image_digest_it_pulled() {
+    STUB_REPO_DIGESTS="ghcr.io/mrtheroi/memry-server@sha256:aaa111"
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    calls="$(compose_env_of_up_and_run)"
+    [ "$(echo "$calls" | grep -c .)" -ge 3 ] || fail "expected migrate, up and token calls: $calls"
+    ! echo "$calls" | grep -qv 'MEMRY_IMAGE=ghcr.io/mrtheroi/memry-server@sha256:aaa111' \
+        || fail "a Compose call did not get the digest: $calls"
+}
+
+test_a_latest_image_in_env_is_pinned_to_its_digest() {
+    mkdir -p "$DIR"
+    printf 'APP_KEY=base64:abc\nDB_PASSWORD=pw\nAPP_PORT=8000\nAPP_URL=http://localhost:8000\nMEMRY_IMAGE=ghcr.io/acme/memry-server:latest\n' > "${DIR}/.env"
+    cp "${DIR}/.env" "${T}/before.env"
+    STUB_REPO_DIGESTS="ghcr.io/acme/memry-server@sha256:bbb222"
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    assert_log_contains "MEMRY_IMAGE=ghcr.io/acme/memry-server@sha256:bbb222"
+    assert_log_not_contains "MEMRY_IMAGE=ghcr.io/acme/memry-server:latest"
+    cmp -s "${DIR}/.env" "${T}/before.env" || fail ".env changed on disk"
+}
+
+test_the_digest_of_the_pulled_repository_wins_among_several() {
+    STUB_REPO_DIGESTS="docker.io/other/mirror@sha256:ccc333 ghcr.io/mrtheroi/memry-server@sha256:ddd444"
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    assert_log_contains "MEMRY_IMAGE=ghcr.io/mrtheroi/memry-server@sha256:ddd444"
+    assert_log_not_contains "sha256:ccc333"
+}
+
+test_the_first_digest_is_used_when_none_matches_the_repository() {
+    STUB_REPO_DIGESTS="docker.io/other/mirror@sha256:ccc333 quay.io/x/y@sha256:eee555"
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    assert_log_contains "MEMRY_IMAGE=docker.io/other/mirror@sha256:ccc333"
+}
+
+# A locally built or loaded image has no digest, and an untagged or :latest
+# reference would be pulled by Compose: it gets an immutable local tag derived
+# from its image ID, which is local and never "latest".
+test_a_digestless_local_image_is_pinned_with_a_tag_from_its_id() {
+    mkdir -p "$DIR"
+    printf 'APP_KEY=base64:abc\nDB_PASSWORD=pw\nAPP_PORT=8000\nAPP_URL=http://localhost:8000\nMEMRY_IMAGE=memry-server:latest\n' > "${DIR}/.env"
+    cp "${DIR}/.env" "${T}/before.env"
+    STUB_IMAGE_ID="sha256:abcdef0123456789ffff"
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    assert_log_contains "docker tag memry-server:latest memry-server:pinned-abcdef012345"
+    calls="$(compose_env_of_up_and_run)"
+    [ "$(echo "$calls" | grep -c .)" -ge 3 ] || fail "expected migrate, up and token calls: $calls"
+    ! echo "$calls" | grep -qv 'MEMRY_IMAGE=memry-server:pinned-abcdef012345' || fail "a Compose call did not get the pinned tag: $calls"
+    assert_log_not_contains "--pull"
+    cmp -s "${DIR}/.env" "${T}/before.env" || fail ".env changed on disk"
+}
+
+test_a_digested_image_is_not_tagged() {
+    STUB_REPO_DIGESTS="ghcr.io/mrtheroi/memry-server@sha256:aaa111"
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    assert_log_not_contains "docker tag "
+}
+
+test_fails_clearly_when_the_local_pin_tag_cannot_be_created() {
+    STUB_TAG_STATUS=1
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 1
+    assert_output_contains "could not tag"
+}
+
+test_the_callers_memry_image_cannot_change_compose() {
+    mkdir -p "$DIR"
+    printf 'APP_KEY=base64:abc\nDB_PASSWORD=pw\nAPP_PORT=8000\nMEMRY_IMAGE=img:1\n' > "${DIR}/.env"
+    AMBIENT_ENV="MEMRY_IMAGE=evil.example/memry:1"
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_log_not_contains "MEMRY_IMAGE=evil.example"
+    assert_status 0
+    assert_log_not_contains "docker pull evil.example"
 }
 
 test_fails_with_a_hint_when_the_server_never_comes_up() {
@@ -467,7 +578,7 @@ test_no_cli_prints_the_token_once_with_the_setup_command() {
     STUB_TOKEN='12|Secr3tTokenValue'
     run_install --email you@example.com --dir "$DIR" --no-cli
     assert_status 0
-    assert_log_contains "docker compose run --pull never --rm -T app token you@example.com @ ${DIR}"
+    assert_log_contains "docker compose run --rm -T app token you@example.com @ ${DIR}"
     [ "$(grep -c '12|Secr3tTokenValue' "$OUT")" = 1 ] || fail "the token is not printed exactly once"
     assert_output_contains "store it like a password"
     assert_output_contains "memry setup --url http://localhost:8000 --token"
@@ -579,11 +690,11 @@ STUB
 test_relative_and_tilde_directories_become_absolute() {
     mkdir -p "${T}/cwd"
     (cd "${T}/cwd" && run_install --email you@example.com --dir rel --no-cli)
-    assert_log_contains "docker compose up --pull never -d app scheduler @ $(cd "${T}/cwd" && pwd -P)/rel"
+    assert_log_contains "docker compose up -d app scheduler @ $(cd "${T}/cwd" && pwd -P)/rel"
     # shellcheck disable=SC2088 # the literal ~ is what is being tested
     run_install --email you@example.com --dir '~/tilde' --no-cli
     assert_status 0
-    assert_log_contains "docker compose up --pull never -d app scheduler @ ${T}/tilde"
+    assert_log_contains "docker compose up -d app scheduler @ ${T}/tilde"
 }
 
 test_reads_quoted_values_from_an_existing_env() {
@@ -799,7 +910,7 @@ test_keeps_path_when_the_env_file_defines_it() {
     printf 'APP_KEY=base64:abc\nDB_PASSWORD=pw\nAPP_PORT=8000\nMEMRY_IMAGE=img:1\nPATH=/nowhere\nHOME=/nowhere\n' > "${DIR}/.env"
     run_install --email you@example.com --dir "$DIR" --no-cli
     assert_status 0
-    assert_log_contains "docker compose run --pull never --rm migrate"
+    assert_log_contains "docker compose run --rm migrate"
 }
 
 test_keeps_values_assigned_with_spaces_or_a_colon() {
