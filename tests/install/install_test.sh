@@ -418,10 +418,10 @@ test_starts_the_server_in_the_directory() {
     assert_status 0
     assert_log_contains "docker pull ghcr.io/mrtheroi/memry-server:0.18.1 @ ${DIR}"
     assert_log_contains "docker pull postgres:16-alpine @ ${DIR}"
-    assert_log_contains "docker compose run --pull never --rm migrate @ ${DIR}"
-    assert_log_contains "docker compose up --pull never -d app scheduler @ ${DIR}"
+    assert_log_contains "docker compose run --rm migrate @ ${DIR}"
+    assert_log_contains "docker compose up -d app scheduler @ ${DIR}"
     assert_log_contains "http://localhost:8000/up"
-    order="$(grep -n -e 'docker pull' -e 'run --pull never --rm migrate' -e 'up --pull never -d app' -e '/up' "$STUB_LOG" | cut -d: -f1 | xargs)"
+    order="$(grep -n -e 'docker pull' -e 'run --rm migrate' -e 'up -d app' -e '/up' "$STUB_LOG" | cut -d: -f1 | xargs)"
     [ "$order" = "$(echo "$order" | tr ' ' '\n' | sort -n | xargs)" ] || fail "steps out of order: $order"
 }
 
@@ -437,8 +437,17 @@ test_pulls_resolved_images_with_the_callers_environment() {
     assert_log_contains "pull env: AWS_PROFILE=ecr"
     assert_log_not_contains "docker pull evil.example"
     assert_log_not_contains "compose pull"
-    assert_log_contains "docker compose up --pull never"
-    assert_log_contains "docker compose run --pull never --rm -T app token"
+    assert_log_contains "docker compose up"
+    assert_log_contains "docker compose run --rm -T app token"
+}
+
+# `docker compose run --pull` only exists since Compose v2.32.2 (`up --pull`
+# since ~v2.10). The images are already local when Compose runs, and Compose's
+# default pull_policy (missing) never pulls an image that is present.
+test_compose_commands_work_on_older_compose_v2() {
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    assert_log_not_contains "--pull"
 }
 
 test_fails_with_a_hint_when_the_server_never_comes_up() {
@@ -467,7 +476,7 @@ test_no_cli_prints_the_token_once_with_the_setup_command() {
     STUB_TOKEN='12|Secr3tTokenValue'
     run_install --email you@example.com --dir "$DIR" --no-cli
     assert_status 0
-    assert_log_contains "docker compose run --pull never --rm -T app token you@example.com @ ${DIR}"
+    assert_log_contains "docker compose run --rm -T app token you@example.com @ ${DIR}"
     [ "$(grep -c '12|Secr3tTokenValue' "$OUT")" = 1 ] || fail "the token is not printed exactly once"
     assert_output_contains "store it like a password"
     assert_output_contains "memry setup --url http://localhost:8000 --token"
@@ -579,11 +588,11 @@ STUB
 test_relative_and_tilde_directories_become_absolute() {
     mkdir -p "${T}/cwd"
     (cd "${T}/cwd" && run_install --email you@example.com --dir rel --no-cli)
-    assert_log_contains "docker compose up --pull never -d app scheduler @ $(cd "${T}/cwd" && pwd -P)/rel"
+    assert_log_contains "docker compose up -d app scheduler @ $(cd "${T}/cwd" && pwd -P)/rel"
     # shellcheck disable=SC2088 # the literal ~ is what is being tested
     run_install --email you@example.com --dir '~/tilde' --no-cli
     assert_status 0
-    assert_log_contains "docker compose up --pull never -d app scheduler @ ${T}/tilde"
+    assert_log_contains "docker compose up -d app scheduler @ ${T}/tilde"
 }
 
 test_reads_quoted_values_from_an_existing_env() {
@@ -799,7 +808,7 @@ test_keeps_path_when_the_env_file_defines_it() {
     printf 'APP_KEY=base64:abc\nDB_PASSWORD=pw\nAPP_PORT=8000\nMEMRY_IMAGE=img:1\nPATH=/nowhere\nHOME=/nowhere\n' > "${DIR}/.env"
     run_install --email you@example.com --dir "$DIR" --no-cli
     assert_status 0
-    assert_log_contains "docker compose run --pull never --rm migrate"
+    assert_log_contains "docker compose run --rm migrate"
 }
 
 test_keeps_values_assigned_with_spaces_or_a_colon() {

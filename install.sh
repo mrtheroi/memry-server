@@ -315,10 +315,13 @@ start_server() {
     done
 
     step "Running database migrations"
-    compose run --pull never --rm migrate || die "migrations failed. See the output above, or run: cd ${QDIR} && docker compose logs postgres"
+    # No --pull flag: the images are local by now, and Compose's default
+    # pull_policy (missing) never pulls a present image. `run --pull` only exists
+    # since Compose v2.32.2, so passing it would break older Compose v2 installs.
+    compose run --rm migrate || die "migrations failed. See the output above, or run: cd ${QDIR} && docker compose logs postgres"
 
     step "Starting memry"
-    compose up --pull never -d app scheduler || die "could not start memry. Run: cd ${QDIR} && docker compose logs app"
+    compose up -d app scheduler || die "could not start memry. Run: cd ${QDIR} && docker compose logs app"
     wait_until_up
 }
 
@@ -369,7 +372,7 @@ parse_token() {
 # The token only lives in the TOKEN variable: it is never written to disk.
 issue_token() {
     step "Creating a token for ${EMAIL}"
-    token_output="$(compose run --pull never --rm -T app token "$EMAIL")" \
+    token_output="$(compose run --rm -T app token "$EMAIL")" \
         || die "could not create the user and token. Check the logs with: cd ${QDIR} && docker compose logs app"
     TOKEN="$(printf '%s\n' "$token_output" | parse_token)"
     token_output=""
