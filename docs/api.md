@@ -61,7 +61,14 @@ The email is trimmed and lowercased. The code has 6 digits, expires in 5 minutes
 | | `422` | Validation errors, or `Invalid or expired code.` (wrong, expired, used or superseded code; the 5th wrong attempt burns the code) |
 | | `429` | Rate limit exceeded for the IP (see [Security](security.md#rate-limits)) |
 | `DELETE /api/auth/token` | `204` | The token used for the request is revoked; the user's other tokens stay valid |
-| | `401` | Missing, invalid or already revoked token |
+| | `401` | Missing, invalid, expired (30 days without use) or already revoked token |
+| | `429` | Rate limit exceeded for the user (see [Security](security.md#rate-limits)) |
+| `GET /api/auth/tokens` | `200` | `{"data": [{"id", "name", "created_at", "last_used_at", "expires_at", "current"}]}` for the caller's tokens only. `expires_at` is when the token expires from inactivity; `current` marks the token used for the request. Hashes and plaintext are never returned |
+| `DELETE /api/auth/tokens/{id}` | `204` | That token is revoked; the others stay valid |
+| | `404` | Unknown id or a token of another user (indistinguishable) |
+| | `429` | Rate limit exceeded for the user |
+
+Tokens expire after 30 days without use (`MEMRY_TOKEN_IDLE_DAYS`); an expired token answers `401 {"message": "Unauthenticated."}`, like any invalid token. `php artisan memory:prune-tokens` (scheduled daily) removes them.
 
 ## Account deletion
 

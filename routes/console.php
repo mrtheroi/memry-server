@@ -10,3 +10,4 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote');
 
 Schedule::command('model:prune', ['--model' => [LoginCode::class]])->daily();
+Schedule::command('memory:prune-tokens')->daily();
