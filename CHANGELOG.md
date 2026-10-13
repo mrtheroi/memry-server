@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Signed releases** (#31): on a release tag the image is signed by digest with keyless cosign and pushed with SBOM and max-detail provenance attestations, and `SHA256SUMS` for `install.sh` and the files it downloads is signed (`SHA256SUMS.sigstore.json`) and attached to the GitHub release. See "Verifying releases" in `docs/self-hosting.md`
+
 ### Fixed
 
 - **Concurrent first migrations**: the container `migrate` step now runs `php artisan memory:migrate`, which takes a PostgreSQL advisory lock (`pg_advisory_lock`) around `migrate --force` and always releases it, so several containers starting on a brand-new database queue up instead of racing. This replaces the `--isolated` flag and the cache-table pre-step, which ran without a lock (#31). The command records the backend pid after locking and fails if it changed during the run or if the unlock reports the lock was not held, which happens behind a transaction or statement pooler (for example PgBouncer in transaction mode); migrations need a direct or session-pooled connection, documented in `docs/self-hosting.md`

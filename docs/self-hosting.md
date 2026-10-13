@@ -241,11 +241,40 @@ The install script has two more tests, both run by the same workflow:
 - `sh tests/install/install_test.sh` unit tests `install.sh` with stubbed `docker`, `curl`, `memry` and `brew` (no Docker needed). It also fails when the version pinned in `install.sh` is not the latest release in the CHANGELOG, so bump both together.
 - `MEMRY_IMAGE=<image> docker/install-e2e.sh` runs `install.sh --no-cli` twice against a real image, with the Compose and env files of the checkout (`MEMRY_SOURCE_DIR`), and checks `/up`, the MCP tools that `APP_KEY` and `DB_PASSWORD` survive the second run, and that a run without `.env` refuses to reuse the existing database volume.
 
+## Verifying releases
+
+Release artifacts are signed keyless with [cosign](https://docs.sigstore.dev/cosign/): the signing identity is the `docker.yml` run of the release tag, not a key. Replace `<version>` with the release (for example `0.19.0`) and `<digest>` with the image digest (`docker buildx imagetools inspect ghcr.io/mrtheroi/memry-server:<version>` prints it).
+
+The image, signed by digest. The image index also carries SBOM and provenance attestations:
+
+```sh
+cosign verify ghcr.io/mrtheroi/memry-server@<digest> \
+  --certificate-identity-regexp '^https://github\.com/mrtheroi/memry-server/\.github/workflows/docker\.yml@refs/tags/v.+$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+The installer files. The release for the tag has `SHA256SUMS` (for `install.sh`, `docker-compose.yml` and `docker/community.env.example`) and its bundle `SHA256SUMS.sigstore.json`:
+
+```sh
+mkdir -p memry-verify/docker && cd memry-verify
+base=https://raw.githubusercontent.com/mrtheroi/memry-server/v<version>
+for f in install.sh docker-compose.yml docker/community.env.example; do curl -fsSL -o "$f" "$base/$f"; done
+rel=https://github.com/mrtheroi/memry-server/releases/download/v<version>
+curl -fsSLO "$rel/SHA256SUMS" && curl -fsSLO "$rel/SHA256SUMS.sigstore.json"
+
+cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity-regexp '^https://github\.com/mrtheroi/memry-server/\.github/workflows/docker\.yml@refs/tags/v.+$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+sha256sum -c SHA256SUMS
+```
+
+On macOS use `shasum -a 256 -c SHA256SUMS`.
+
 ## Releasing (maintainers)
 
 Bump `MEMRY_VERSION` in `install.sh` with `config/api.php`, the README and the CHANGELOG; the unit tests fail otherwise. The install command in the docs points at the tag, so it works once the tag and its image are published.
 
-Pushing a `vX.Y.Z` tag runs `.github/workflows/docker.yml`: it runs the install script checks, smoke tests the image, runs the install script end to end, then publishes the immutable `X.Y.Z` tag to `ghcr.io/mrtheroi/memry-server`. There are no floating `X.Y` tags. Every tag gets its own run; runs for different tags are neither queued behind each other nor cancelled.
+Pushing a `vX.Y.Z` tag runs `.github/workflows/docker.yml`: it runs the install script checks, smoke tests the image, runs the install script end to end, then publishes the immutable `X.Y.Z` tag to `ghcr.io/mrtheroi/memry-server`, signs the image digest with cosign and attaches signed installer checksums to the GitHub release (created if missing). There are no floating `X.Y` tags. Every tag gets its own run; runs for different tags are neither queued behind each other nor cancelled.
 
 `latest` is moved by the last step of the run, after `X.Y.Z` is pushed. That step lists the repository's tags again and points `latest` at `X.Y.Z` only if it is the highest stable `vX.Y.Z` tag at that moment, so an older or backport tag normally does not take it over. If the smoke test or the push fails, `latest` stays where it was.
 

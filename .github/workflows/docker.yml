@@ -60,6 +60,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write # keyless cosign signing of the pushed image
     steps:
       - uses: actions/checkout@v4
 
@@ -124,16 +125,33 @@ jobs:
       # build above via the gha cache; arm64 is built under QEMU.
       - name: Build and push multi-arch image
         if: env.PUBLISH == 'true'
+        id: push
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          # SBOM and max-detail provenance attestations are stored in the
+          # image index, so signing the index digest covers them too.
+          sbom: true
+          provenance: mode=max
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Signed by digest, never by tag, so the signature cannot be moved to
+      # another image. The identity is this workflow run (GitHub OIDC).
+      - name: Install cosign
+        if: env.PUBLISH == 'true'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign the image (keyless)
+        if: env.PUBLISH == 'true'
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
 
       # Checked against the remote tags right before moving latest (not at the
       # start of the run), so an older or backport tag never takes it over.
@@ -153,3 +171,37 @@ jobs:
             exit 0
           fi
           docker buildx imagetools create --tag "${IMAGE}:latest" "${IMAGE}:${VERSION}"
+
+  # Signed checksums of the installer and every file it downloads, attached to
+  # the GitHub release of the tag. Verification is documented in
+  # docs/self-hosting.md ("Verifying releases").
+  release-checksums:
+    name: Sign and publish installer checksums
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build-and-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # create the release and upload its assets
+      id-token: write # keyless cosign signing
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: sigstore/cosign-installer@v3
+
+      # Paths are relative to the repository root, the layout install.sh
+      # downloads from, so `sha256sum -c` works in a directory with that layout.
+      - name: Build and sign SHA256SUMS
+        run: |
+          sha256sum install.sh docker-compose.yml docker/community.env.example > SHA256SUMS
+          cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes "Release ${TAG}. See CHANGELOG.md."
+          fi
+          gh release upload "$TAG" SHA256SUMS SHA256SUMS.sigstore.json --clobber
