@@ -36,6 +36,8 @@ Options:
   --port PORT        Host port of the server (default: 8000)
   --agents LIST      Agents to connect, comma-separated (e.g. claude-code,codex);
                      without it, memry setup asks
+  --url URL          Address where the server is reachable, for a Docker daemon on
+                     another machine (e.g. http://10.0.0.5:8000); needed with it
   --no-cli           Do not install or run the memry CLI; print the token instead
   -h, --help         Show this help
 
@@ -55,6 +57,8 @@ parse_args() {
     EMAIL=""
     DIR="${HOME}/memry-community"
     PORT=""
+    PUBLIC_URL=""
+    URL_GIVEN=0
     AGENTS=""
     INSTALL_CLI=1
     while [ $# -gt 0 ]; do
@@ -68,11 +72,19 @@ parse_args() {
             --port=*) PORT="${1#*=}" ;;
             --agents) [ $# -ge 2 ] || usage_error "--agents needs a value"; AGENTS="$2"; shift ;;
             --agents=*) AGENTS="${1#*=}" ;;
+            --url) [ $# -ge 2 ] || usage_error "--url needs a value"; PUBLIC_URL="$2"; URL_GIVEN=1; shift ;;
+            --url=*) PUBLIC_URL="${1#*=}"; URL_GIVEN=1 ;;
             --no-cli) INSTALL_CLI=0 ;;
             *) usage_error "unknown option: $1" ;;
         esac
         shift
     done
+    if [ "$URL_GIVEN" = 1 ]; then
+        case "$PUBLIC_URL" in
+            http://?* | https://?*) PUBLIC_URL="${PUBLIC_URL%/}" ;;
+            *) usage_error "--url must be an http:// or https:// address" ;;
+        esac
+    fi
     [ -n "$PORT" ] || PORT=8000
     case "$PORT" in
         # At most 5 digits, so the range check below cannot overflow.
@@ -88,6 +100,16 @@ parse_args() {
 
 DOCKER_DOCS="https://docs.docker.com/get-docker/"
 
+# is_remote_endpoint <docker endpoint>: a daemon on another machine. Unix
+# sockets, named pipes and tcp to this host are local; an empty endpoint is
+# the default local socket.
+is_remote_endpoint() {
+    case "$1" in
+        '' | unix://* | npipe://* | fd://* | tcp://localhost | tcp://localhost:* | tcp://127.0.0.1 | tcp://127.0.0.1:* | 'tcp://[::1]' | 'tcp://[::1]:'*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
 preflight() {
     command -v docker >/dev/null 2>&1 \
         || die "Docker is not installed. Install Docker (with Compose v2) first: ${DOCKER_DOCS}"
@@ -95,6 +117,12 @@ preflight() {
     compose_major="$(printf '%s' "$compose_version" | sed -n 's/^v\{0,1\}\([0-9][0-9]*\)\..*/\1/p')"
     if [ -z "$compose_major" ] || [ "$compose_major" -lt 2 ]; then
         die "Docker Compose v2 is required (the \`docker compose\` command). See ${DOCKER_DOCS}"
+    fi
+    # DOCKER_HOST wins over the active context, as in the docker CLI.
+    endpoint="${DOCKER_HOST:-}"
+    [ -n "$endpoint" ] || endpoint="$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null)" || endpoint=""
+    if [ -z "$PUBLIC_URL" ] && is_remote_endpoint "$endpoint"; then
+        die "Docker is using a remote Docker daemon (${endpoint}): memry would run on that machine, not here, and this script would look for it on localhost. Use a local Docker, or pass --url with the address where that machine's port will be reachable (for example --url http://HOST:8000)."
     fi
     command -v curl >/dev/null 2>&1 || die "curl is required. Install it with your package manager."
     docker info >/dev/null 2>&1 \
@@ -241,31 +269,37 @@ configure_env() {
     env_has MEMRY_IMAGE "$env_file" || env_set MEMRY_IMAGE "${MEMRY_IMAGE:-$DEFAULT_IMAGE}" "$env_file"
     env_has APP_KEY "$env_file" || env_set APP_KEY "$(generate_app_key)" "$env_file"
     env_has APP_PORT "$env_file" || env_set APP_PORT "$PORT" "$env_file"
-    env_has APP_URL "$env_file" || env_set APP_URL "http://localhost:$(env_get APP_PORT "$env_file")" "$env_file"
+    env_has APP_URL "$env_file" || env_set APP_URL "${PUBLIC_URL:-http://localhost:$(env_get APP_PORT "$env_file")}" "$env_file"
     env_has DB_PASSWORD "$env_file" || env_set DB_PASSWORD "$(generate_password)" "$env_file"
 }
 
 step() { printf '\n==> %s\n' "$*"; }
 
 # compose <args>: docker compose for this install only. Variables exported in
-# the calling shell take precedence over .env in Compose, so every variable the
-# Compose file or .env uses, and every COMPOSE_* one, is unset for the call
-# (except what running docker itself needs: PATH, HOME, DOCKER_*, ...); the
-# project directory and .env are passed explicitly.
+# the calling shell take precedence over .env in Compose, including names that
+# only appear inside .env values (MEMRY_IMAGE=${REGISTRY:-...}). So Compose
+# runs with a minimal environment (env -i) holding only what the docker CLI
+# needs to run and reach its daemon, never COMPOSE_* nor any variable of the
+# Compose file or .env. The project directory and .env are passed explicitly.
 compose() {
     (
-        for name in $(compose_variable_names); do unset "$name"; done
-        exec docker compose --project-directory "$DIR" --env-file "${DIR}/.env" "$@"
+        set -- docker compose --project-directory "$DIR" --env-file "${DIR}/.env" "$@"
+        value=""
+        for name in $(compose_passthrough_names); do
+            # The names come from the allow-list below: safe to eval.
+            eval "value=\${$name}"
+            set -- "$name=$value" "$@"
+        done
+        exec env -i "$@"
     )
 }
 
-compose_variable_names() {
-    {
-        sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*[=:].*/\2/p' "${DIR}/.env"
-        # shellcheck disable=SC2016 # a literal ${NAME reference in the Compose file
-        grep -o '\${[A-Za-z_][A-Za-z0-9_]*' "${DIR}/docker-compose.yml" | sed 's/^\${//'
-        env | sed -n 's/^\(COMPOSE_[A-Za-z0-9_]*\)=.*/\1/p'
-    } | sort -u | grep -v -E '^(PATH|HOME|USER|TMPDIR|DOCKER_[A-Za-z0-9_]*|XDG_[A-Za-z0-9_]*)$'
+# The variables docker needs: working directory (set by the script), executable lookup, config and credential helper
+# location, locale and terminal, ssh agent for ssh:// endpoints, DOCKER_*
+# (host, context, TLS, config) and XDG_* (config directories).
+compose_passthrough_names() {
+    env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' \
+        | grep -E '^(PATH|HOME|PWD|USER|LOGNAME|TMPDIR|TERM|LANG|LC_[A-Z_]+|SSH_AUTH_SOCK|DOCKER_[A-Za-z0-9_]+|XDG_[A-Za-z0-9_]+)$' || true
 }
 
 start_server() {
@@ -299,10 +333,21 @@ published_port() {
     esac
 }
 
+# probe_up <max seconds>: the HTTP status of ${URL}/up ("000" when unreachable).
+probe_up() {
+    if [ -n "$PUBLIC_URL" ]; then
+        curl -s -o /dev/null -w '%{http_code}' --max-time "$1" "${URL}/up" || true
+    else
+        curl -s -o /dev/null -w '%{http_code}' --noproxy '*' --max-time "$1" "${URL}/up" || true
+    fi
+}
+
 # Waits for /up until a wall-clock deadline: slow probes count against the
 # timeout too, and no probe runs past it.
 wait_until_up() {
-    URL="http://localhost:$(published_port)"
+    # A local server is probed without any proxy; a --url one with the
+    # caller's proxy settings, since it may only be reachable through them.
+    if [ -n "$PUBLIC_URL" ]; then URL="$PUBLIC_URL"; else URL="http://localhost:$(published_port)"; fi
     timeout="${MEMRY_UP_TIMEOUT:-120}"
     deadline=$(($(date +%s) + timeout))
     printf 'Waiting for %s/up' "$URL"
@@ -310,7 +355,7 @@ wait_until_up() {
         remaining=$((deadline - $(date +%s)))
         [ "$remaining" -gt 0 ] || break
         [ "$remaining" -le 5 ] || remaining=5
-        if [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time "$remaining" "${URL}/up" || true)" = "200" ]; then
+        if [ "$(probe_up "$remaining")" = "200" ]; then
             say " ready."
             return 0
         fi
@@ -333,7 +378,7 @@ issue_token() {
         || die "could not create the user and token. Check the logs with: cd ${QDIR} && docker compose logs app"
     TOKEN="$(printf '%s\n' "$token_output" | parse_token)"
     token_output=""
-    [ -n "$TOKEN" ] || die "the server did not print a token. Run it by hand: cd ${QDIR} && docker compose run --rm app token ${EMAIL}"
+    [ -n "$TOKEN" ] || die "the server did not print a token. Run it by hand: cd ${QDIR} && docker compose run --rm app token $(shell_quote "$EMAIL")"
     say "Token created."
 }
 

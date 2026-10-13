@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`install.sh` hardening** (#31): Docker Compose now runs with a minimal environment (`env -i` plus an allow-list), so variables exported in the caller's shell, even those referenced only inside `.env` values, cannot change what it runs; the local `/up` probe ignores proxy variables (`curl --noproxy '*'`); a remote Docker daemon (`DOCKER_HOST` or the active context: `ssh://` or non-local `tcp://`) is refused unless `--url` gives the address where the server will be reachable; the email in the printed token recovery command is shell-quoted
 - **Team backfill migration**: it no longer runs inside one wrapping transaction (`$withinTransaction = false`), so the per-user backfill commits as it goes, holds short locks and can be resumed after a failure
 - **Upgrades from a release before teams**: the `app` container now runs `memory:backfill-teams` on start, before serving, so rows written by the old app during the upgrade get their team; it is idempotent and exits 0 when nothing is left. `docs/self-hosting.md` recommends stopping the app before migrating
 

@@ -36,6 +36,9 @@ stub_docker() {
 #!/bin/sh
 # Compose calls carry --project-directory and --env-file; they are logged on
 # their own line and dropped, so the cases below match the plain commands.
+# Compose runs with a minimal environment, so the STUB_* settings reach this
+# stub through a file written by run_install.
+[ ! -f "$(dirname "$0")/docker.env" ] || . "$(dirname "$0")/docker.env"
 if [ "${1:-}" = compose ]; then
     shift
     flags=""
@@ -48,7 +51,7 @@ if [ "${1:-}" = compose ]; then
     set -- compose "$@"
     echo "compose flags:${flags}" >> "$STUB_LOG"
     # `compose version` (the preflight) reads no project.
-    [ "${2:-}" = version ] || echo "compose env: COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME-unset} DB_PASSWORD=${DB_PASSWORD-unset} APP_PORT=${APP_PORT-unset}" >> "$STUB_LOG"
+    [ "${2:-}" = version ] || echo "compose env: COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME-unset} DB_PASSWORD=${DB_PASSWORD-unset} APP_PORT=${APP_PORT-unset} REGISTRY=${REGISTRY-unset} DOCKER_CONTEXT=${DOCKER_CONTEXT-unset}" >> "$STUB_LOG"
 fi
 echo "docker $* @ $(pwd)" >> "$STUB_LOG"
 case "$*" in
@@ -69,13 +72,14 @@ case "$*" in
         port="${STUB_PUBLISHED_PORT:-$(sed -n 's/^APP_PORT="*\([0-9]*\).*/\1/p' .env | tail -n 1)}"
         echo "0.0.0.0:${port:-8000}"
         ;;
+    "context inspect"*) echo "${STUB_CONTEXT_HOST:-}" ;;
     "volume inspect"*)
         [ "${3:-}" = "${STUB_EXISTING_VOLUME:-}" ] && exit 0
         exit "${STUB_VOLUME_STATUS:-1}"
         ;;
     *" token "*)
         echo "MEMRY_TOKEN in env: ${MEMRY_TOKEN:-unset}" >> "$STUB_LOG"
-        printf 'Token: %s\r\n' "${STUB_TOKEN:-7|AbCdEf123}"
+        [ -n "${STUB_NO_TOKEN:-}" ] || printf 'Token: %s\r\n' "${STUB_TOKEN:-7|AbCdEf123}"
         ;;
 esac
 exit 0
@@ -163,7 +167,7 @@ setup_test() {
     unset STUB_DAEMON_STATUS STUB_COMPOSE_VERSION STUB_COMPOSE_STATUS STUB_PULL_STATUS \
         STUB_IMAGE_STATUS STUB_TOKEN STUB_UP_STATUS STUB_MEMRY_VERSION STUB_SETUP_STATUS \
         STUB_CURL_FAIL STUB_VOLUME_STATUS STUB_EXISTING_VOLUME STUB_CLOCK_STEP STUB_PUBLISHED_PORT \
-        STUB_LOCAL_IMAGE STUB_APP_IMAGE
+        STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_NO_TOKEN STUB_CONTEXT_HOST
     stub_docker
     stub_curl
     stub_memry
@@ -174,6 +178,13 @@ setup_test() {
 
 # Runs install.sh with only the stubs and the system tools on PATH.
 run_install() {
+    stub_value=""
+    for stub_var in STUB_LOG STUB_SOURCE STUB_DAEMON_STATUS STUB_COMPOSE_VERSION STUB_COMPOSE_STATUS \
+        STUB_PULL_STATUS STUB_IMAGE_STATUS STUB_TOKEN STUB_NO_TOKEN STUB_VOLUME_STATUS \
+        STUB_EXISTING_VOLUME STUB_PUBLISHED_PORT STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_CONTEXT_HOST; do
+        eval "stub_value=\${$stub_var-}"
+        printf "%s='%s'; export %s\n" "$stub_var" "$stub_value" "$stub_var"
+    done > "${STUBS}/docker.env"
     # AMBIENT_ENV holds NAME=value words: split on purpose.
     # shellcheck disable=SC2086
     env -i HOME="$T" PATH="${STUBS}:${SYSBIN}" STUB_LOG="$STUB_LOG" STUB_SOURCE="$STUB_SOURCE" \
@@ -192,6 +203,8 @@ run_install() {
         ${STUB_PUBLISHED_PORT:+STUB_PUBLISHED_PORT="$STUB_PUBLISHED_PORT"} \
         ${STUB_LOCAL_IMAGE:+STUB_LOCAL_IMAGE="$STUB_LOCAL_IMAGE"} \
         ${STUB_APP_IMAGE:+STUB_APP_IMAGE="$STUB_APP_IMAGE"} \
+        ${STUB_NO_TOKEN:+STUB_NO_TOKEN="$STUB_NO_TOKEN"} \
+        ${STUB_CONTEXT_HOST:+STUB_CONTEXT_HOST="$STUB_CONTEXT_HOST"} \
         ${STUB_CLOCK_STEP:+STUB_CLOCK_STEP="$STUB_CLOCK_STEP"} \
         ${MEMRY_VERSION_OVERRIDE:+MEMRY_VERSION="$MEMRY_VERSION_OVERRIDE"} \
         ${MEMRY_IMAGE_OVERRIDE:+MEMRY_IMAGE="$MEMRY_IMAGE_OVERRIDE"} \
@@ -652,6 +665,70 @@ test_compose_ignores_variables_exported_in_the_calling_shell() {
     [ "$(env_value APP_PORT)" = 8000 ] || fail "APP_PORT came from the calling shell"
 }
 
+test_compose_ignores_variables_referenced_in_env_values() {
+    mkdir -p "$DIR"
+    # shellcheck disable=SC2016 # a literal Compose interpolation
+    printf 'APP_KEY=base64:abc\nDB_PASSWORD=pw\nAPP_PORT=8000\nMEMRY_IMAGE=${REGISTRY:-ghcr.io/acme}/memry-server:1\n' > "${DIR}/.env"
+    AMBIENT_ENV="REGISTRY=evil.example DOCKER_CONTEXT=desktop"
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    assert_log_contains "REGISTRY=unset"
+    assert_log_not_contains "evil.example"
+    assert_log_contains "DOCKER_CONTEXT=desktop"
+}
+
+test_refuses_a_remote_docker_host_without_url() {
+    AMBIENT_ENV="DOCKER_HOST=tcp://10.0.0.5:2376"
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 1
+    assert_output_contains "remote Docker daemon (tcp://10.0.0.5:2376)"
+    assert_output_contains "--url"
+    assert_log_not_contains "compose pull"
+    [ ! -e "${DIR}/.env" ] || fail ".env was created"
+}
+
+test_refuses_a_remote_docker_context_without_url() {
+    STUB_CONTEXT_HOST="ssh://deploy@build.example.com"
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 1
+    assert_output_contains "remote Docker daemon (ssh://deploy@build.example.com)"
+    assert_log_contains "docker context inspect --format {{.Endpoints.docker.Host}}"
+    assert_log_not_contains "compose pull"
+}
+
+test_local_docker_endpoints_are_accepted() {
+    for host in unix:///var/run/docker.sock npipe:////./pipe/docker_engine tcp://localhost:2375 tcp://127.0.0.1:2375; do
+        AMBIENT_ENV="DOCKER_HOST=${host}"
+        run_install --email you@example.com --dir "$DIR" --no-cli
+        assert_status 0
+    done
+    unset AMBIENT_ENV
+    STUB_CONTEXT_HOST="unix:///Users/me/.docker/run/docker.sock"
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+}
+
+test_a_remote_docker_daemon_is_allowed_with_an_explicit_url() {
+    AMBIENT_ENV="DOCKER_HOST=tcp://10.0.0.5:2376 http_proxy=http://proxy:3128"
+    run_install --email you@example.com --dir "$DIR" --no-cli --url http://10.0.0.5:8000/
+    assert_status 0
+    assert_log_contains "docker compose up -d app scheduler"
+    assert_log_contains "http://10.0.0.5:8000/up"
+    assert_log_not_contains "--noproxy"
+    assert_log_not_contains "localhost"
+    assert_output_contains "memry setup --url http://10.0.0.5:8000 --token"
+    assert_output_contains "memry is running at http://10.0.0.5:8000"
+    [ "$(env_value APP_URL)" = "http://10.0.0.5:8000" ] || fail "APP_URL is $(env_value APP_URL)"
+}
+
+test_rejects_a_url_that_is_not_http() {
+    for url in 10.0.0.5:8000 ftp://host ""; do
+        run_install --email you@example.com --url "$url"
+        assert_status 2
+        assert_output_contains "--url must be an http:// or https:// address"
+    done
+}
+
 test_reads_env_values_with_inline_comments_like_compose() {
     mkdir -p "$DIR"
     printf 'APP_KEY=base64:abc\nDB_PASSWORD=pw  # db\nAPP_PORT=8124 # forwarded port\nAPP_URL=\nMEMRY_IMAGE="img:1" # pinned\n' > "${DIR}/.env"
@@ -708,6 +785,21 @@ test_quotes_the_directory_in_recovery_commands() {
     run_install --email you@example.com --dir "$DIR" --no-cli
     assert_status 1
     assert_output_contains "cd '${DIR}' && docker compose logs app"
+}
+
+test_quotes_the_email_in_the_token_recovery_command() {
+    STUB_NO_TOKEN=1
+    run_install --email "o'reilly@example.com" --dir "$DIR" --no-cli
+    assert_status 1
+    assert_output_contains "docker compose run --rm app token 'o'\\''reilly@example.com'"
+}
+
+test_the_local_readiness_probe_ignores_proxy_variables() {
+    AMBIENT_ENV="http_proxy=http://proxy:3128 ALL_PROXY=http://proxy:3128"
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    assert_log_contains "--noproxy * "
+    assert_log_contains "http://localhost:8000/up"
 }
 
 # --- run --------------------------------------------------------------------

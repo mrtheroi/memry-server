@@ -35,8 +35,11 @@ Without Homebrew, with `--no-cli`, or if setup fails, the script prints the toke
 | `--email` | required | Email of your memry user |
 | `--dir` | `~/memry-community` | Install directory |
 | `--port` | `8000` | Host port; `APP_URL` is `http://localhost:<port>` |
+| `--url` | `http://localhost:<port>` | Address where the server is reachable; required when Docker points to a remote daemon. Sets `APP_URL`, the `/up` probe and `memry setup --url` |
 | `--agents` | asked by `memry setup` | Agents to connect, e.g. `claude-code,codex` |
 | `--no-cli` | | Skip the memry CLI and print the token |
+
+The script refuses to run against a remote Docker daemon (`DOCKER_HOST` or the active `docker context` pointing to `tcp://` somewhere other than localhost, or to `ssh://`), because memry would start on that machine while the script looked for it on `localhost`. Use a local Docker, or pass `--url http://<host>:<port>` with the address where that machine's port is reachable (it is probed with your proxy settings; the local probe ignores them). Docker Compose runs with a minimal environment (`PATH`, `HOME`, `DOCKER_*`, locale, ssh agent), so variables exported in your shell, including ones referenced inside `.env` values, never change what it starts.
 
 A new `.env` also gets `COMPOSE_PROJECT_NAME`: the directory name plus a checksum of its absolute path (for example `memry-community-1234567890`), so two installs in directories with the same name never share containers or the database volume (`<project>_postgres-data`). It stays the same on every run, and plain `docker compose` commands in the directory use it too. An existing `.env` without it keeps Compose's default project, the directory name, so its volume is not orphaned.
 
