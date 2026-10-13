@@ -276,9 +276,8 @@ step() { printf '\n==> %s\n' "$*"; }
 # runs with a minimal environment (env -i) holding only what the docker CLI
 # needs to run and reach its daemon, never COMPOSE_* nor any variable of the
 # Compose file or .env. The project directory and .env are passed explicitly.
-# MEMRY_PULL_POLICY=never is set here (never taken from the caller): Compose
-# re-pulls an untagged or :latest image even with the default `missing`
-# policy, and the images are already local.
+# MEMRY_IMAGE is set here once the image is pulled (see pin_app_image), never
+# taken from the caller. A process variable beats --env-file in Compose.
 compose() {
     (
         set -- docker compose --project-directory "$DIR" --env-file "${DIR}/.env" "$@"
@@ -288,7 +287,8 @@ compose() {
             eval "value=\${$name}"
             set -- "$name=$value" "$@"
         done
-        exec env -i MEMRY_PULL_POLICY=never "$@"
+        [ -z "${PINNED_IMAGE:-}" ] || set -- "MEMRY_IMAGE=${PINNED_IMAGE}" "$@"
+        exec env -i "$@"
     )
 }
 
@@ -298,6 +298,27 @@ compose() {
 compose_passthrough_names() {
     env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' \
         | grep -E '^(PATH|HOME|PWD|USER|LOGNAME|TMPDIR|TERM|LANG|LC_[A-Z_]+|SSH_AUTH_SOCK|DOCKER_[A-Za-z0-9_]+|XDG_[A-Za-z0-9_]+)$' || true
+}
+
+# pin_app_image <image>: sets PINNED_IMAGE to the digest reference of the
+# image just pulled (repo@sha256:...), so Compose runs exactly that image and
+# never re-pulls it: Compose pulls a :latest or untagged image even with the
+# default `missing` policy, but never an image given by digest that is local.
+# With several digests, the one of the same repository wins, else the first. A
+# locally built image has none: its reference is kept as it is.
+pin_app_image() {
+    repo="${1%%@*}"
+    repo="${repo%:*}"
+    digests="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$1" 2>/dev/null)" || digests=""
+    PINNED_IMAGE="$1"
+    first=""
+    for digest in $digests; do
+        [ -n "$first" ] || first="$digest"
+        case "$digest" in
+            "${repo}@"*) PINNED_IMAGE="$digest"; return 0 ;;
+        esac
+    done
+    [ -z "$first" ] || PINNED_IMAGE="$first"
 }
 
 start_server() {
@@ -315,12 +336,14 @@ start_server() {
                 || die "could not pull ${image}. Check your network, your registry login and the MEMRY_IMAGE value in ${DIR}/.env."
             say "Could not pull ${image}; using the local copy."
         fi
+        # The app image is the one that is not the PostgreSQL service's.
+        case "$image" in postgres:*) ;; *) [ -n "${PINNED_IMAGE:-}" ] || pin_app_image "$image" ;; esac
     done
 
     step "Running database migrations"
-    # No --pull flag: the images are local by now, and Compose's default
-    # pull_policy (missing) never pulls a present image. `run --pull` only exists
-    # since Compose v2.32.2, so passing it would break older Compose v2 installs.
+    # No --pull flag: the app image is pinned by digest and local by now, so
+    # Compose never pulls it. `run --pull` only exists since Compose v2.32.2,
+    # so passing it would break older Compose v2 installs.
     compose run --rm migrate || die "migrations failed. See the output above, or run: cd ${QDIR} && docker compose logs postgres"
 
     step "Starting memry"
