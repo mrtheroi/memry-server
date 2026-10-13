@@ -305,7 +305,9 @@ compose_passthrough_names() {
 # never re-pulls it: Compose pulls a :latest or untagged image even with the
 # default `missing` policy, but never an image given by digest that is local.
 # With several digests, the one of the same repository wins, else the first. A
-# locally built image has none: its reference is kept as it is.
+# locally built or loaded image has none: it gets an immutable local tag
+# derived from its image ID (memry-server:pinned-<12 hex>), local and never
+# "latest", so Compose never pulls it.
 pin_app_image() {
     repo="${1%%@*}"
     repo="${repo%:*}"
@@ -318,7 +320,12 @@ pin_app_image() {
             "${repo}@"*) PINNED_IMAGE="$digest"; return 0 ;;
         esac
     done
-    [ -z "$first" ] || PINNED_IMAGE="$first"
+    if [ -n "$first" ]; then PINNED_IMAGE="$first"; return 0; fi
+    id="$(docker image inspect --format '{{.Id}}' "$1" 2>/dev/null)" || id=""
+    id="${id#sha256:}"
+    [ -n "$id" ] || return 0
+    PINNED_IMAGE="memry-server:pinned-$(printf '%s' "$id" | cut -c1-12)"
+    docker tag "$1" "$PINNED_IMAGE" || die "could not tag ${1} as ${PINNED_IMAGE}, although the image exists locally."
 }
 
 start_server() {

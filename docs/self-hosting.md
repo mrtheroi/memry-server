@@ -25,7 +25,7 @@ Replace `YOUR_EMAIL` with your email. The command downloads the script to a new 
 2. downloads that release's `docker-compose.yml` and example `.env` into `~/memry-community`;
 3. writes `.env` (mode 600) with a generated `APP_KEY`, a random `DB_PASSWORD`, `APP_URL`, `APP_PORT` and `MEMRY_IMAGE`;
 4. pulls the images (`docker pull` in your environment, so credential helpers work for a private `MEMRY_IMAGE`), runs migrations, starts `app` and `scheduler` and waits for `/up`;
-   Compose then runs the app image by its digest (`repo@sha256:...`, set by the script, whatever your shell exports), so it runs exactly the image the script pulled and never re-pulls a `:latest` or untagged one without your registry credentials; `.env` is not changed;
+   Compose then runs the app image by its digest (`repo@sha256:...`, set by the script, whatever your shell exports), so it runs exactly the image the script pulled and never re-pulls a `:latest` or untagged one without your registry credentials; a locally built image without a digest is tagged `memry-server:pinned-<12 hex chars of its image ID>` and run by that tag; `.env` is not changed;
 5. creates your user and a token (kept in memory, never written to disk);
 6. installs the [memry CLI](https://github.com/mrtheroi/memry-cli) with Homebrew if it is missing or older than 0.7.0, and runs `memry setup --url http://localhost:<port> --token`, which reads the token from `MEMRY_TOKEN`.
 

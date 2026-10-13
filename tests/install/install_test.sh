@@ -62,6 +62,11 @@ case "$*" in
         echo "pull env: AWS_PROFILE=${AWS_PROFILE-unset} REGISTRY=${REGISTRY-unset}" >> "$STUB_LOG"
         exit "${STUB_PULL_STATUS:-0}"
         ;;
+    "image inspect --format {{.Id}}"*)
+        # The image ID: STUB_IMAGE_ID.
+        echo "${STUB_IMAGE_ID:-sha256:0123456789abcdef0123456789abcdef}"
+        exit 0
+        ;;
     "image inspect --format"*)
         # Digest references of the local image: STUB_REPO_DIGESTS, space
         # separated, one per line (none: a locally built image).
@@ -72,6 +77,7 @@ case "$*" in
         if [ -n "${STUB_LOCAL_IMAGE:-}" ]; then [ "${3:-}" = "$STUB_LOCAL_IMAGE" ] || [ "${3:-}" = postgres:16-alpine ]; exit $?; fi
         exit "${STUB_IMAGE_STATUS:-0}"
         ;;
+    "tag "*) exit "${STUB_TAG_STATUS:-0}" ;;
     "compose config --images")
         # The images Compose resolved: STUB_APP_IMAGE, or MEMRY_IMAGE in .env,
         # then PostgreSQL.
@@ -186,7 +192,7 @@ setup_test() {
     unset STUB_DAEMON_STATUS STUB_COMPOSE_VERSION STUB_COMPOSE_STATUS STUB_PULL_STATUS \
         STUB_IMAGE_STATUS STUB_TOKEN STUB_UP_STATUS STUB_MEMRY_VERSION STUB_SETUP_STATUS \
         STUB_CURL_FAIL STUB_VOLUME_STATUS STUB_EXISTING_VOLUME STUB_CLOCK_STEP STUB_PUBLISHED_PORT \
-        STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_NO_TOKEN STUB_CONTEXT_HOST STUB_REPO_DIGESTS
+        STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_NO_TOKEN STUB_CONTEXT_HOST STUB_REPO_DIGESTS STUB_IMAGE_ID STUB_TAG_STATUS
     stub_docker
     stub_curl
     stub_memry
@@ -200,7 +206,7 @@ run_install() {
     stub_value=""
     for stub_var in STUB_LOG STUB_SOURCE STUB_DAEMON_STATUS STUB_COMPOSE_VERSION STUB_COMPOSE_STATUS \
         STUB_PULL_STATUS STUB_IMAGE_STATUS STUB_TOKEN STUB_NO_TOKEN STUB_VOLUME_STATUS \
-        STUB_EXISTING_VOLUME STUB_PUBLISHED_PORT STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_CONTEXT_HOST STUB_REPO_DIGESTS; do
+        STUB_EXISTING_VOLUME STUB_PUBLISHED_PORT STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_CONTEXT_HOST STUB_REPO_DIGESTS STUB_IMAGE_ID STUB_TAG_STATUS; do
         eval "stub_value=\${$stub_var-}"
         printf "%s='%s'; export %s\n" "$stub_var" "$stub_value" "$stub_var"
     done > "${STUBS}/docker.env"
@@ -224,6 +230,8 @@ run_install() {
         ${STUB_APP_IMAGE:+STUB_APP_IMAGE="$STUB_APP_IMAGE"} \
         ${STUB_NO_TOKEN:+STUB_NO_TOKEN="$STUB_NO_TOKEN"} \
         ${STUB_REPO_DIGESTS:+STUB_REPO_DIGESTS="$STUB_REPO_DIGESTS"} \
+        ${STUB_IMAGE_ID:+STUB_IMAGE_ID="$STUB_IMAGE_ID"} \
+        ${STUB_TAG_STATUS:+STUB_TAG_STATUS="$STUB_TAG_STATUS"} \
         ${STUB_CONTEXT_HOST:+STUB_CONTEXT_HOST="$STUB_CONTEXT_HOST"} \
         ${STUB_CLOCK_STEP:+STUB_CLOCK_STEP="$STUB_CLOCK_STEP"} \
         ${MEMRY_VERSION_OVERRIDE:+MEMRY_VERSION="$MEMRY_VERSION_OVERRIDE"} \
@@ -502,14 +510,36 @@ test_the_first_digest_is_used_when_none_matches_the_repository() {
     assert_log_contains "MEMRY_IMAGE=docker.io/other/mirror@sha256:ccc333"
 }
 
-test_a_local_image_without_digests_keeps_its_reference() {
+# A locally built or loaded image has no digest, and an untagged or :latest
+# reference would be pulled by Compose: it gets an immutable local tag derived
+# from its image ID, which is local and never "latest".
+test_a_digestless_local_image_is_pinned_with_a_tag_from_its_id() {
     mkdir -p "$DIR"
-    printf 'APP_KEY=base64:abc\nDB_PASSWORD=pw\nAPP_PORT=8000\nMEMRY_IMAGE=memry-server:local\n' > "${DIR}/.env"
+    printf 'APP_KEY=base64:abc\nDB_PASSWORD=pw\nAPP_PORT=8000\nAPP_URL=http://localhost:8000\nMEMRY_IMAGE=memry-server:latest\n' > "${DIR}/.env"
+    cp "${DIR}/.env" "${T}/before.env"
+    STUB_IMAGE_ID="sha256:abcdef0123456789ffff"
     run_install --email you@example.com --dir "$DIR" --no-cli
     assert_status 0
+    assert_log_contains "docker tag memry-server:latest memry-server:pinned-abcdef012345"
     calls="$(compose_env_of_up_and_run)"
-    ! echo "$calls" | grep -qv 'MEMRY_IMAGE=memry-server:local' || fail "the tag was not kept: $calls"
-    assert_log_not_contains "@sha256"
+    [ "$(echo "$calls" | grep -c .)" -ge 3 ] || fail "expected migrate, up and token calls: $calls"
+    ! echo "$calls" | grep -qv 'MEMRY_IMAGE=memry-server:pinned-abcdef012345' || fail "a Compose call did not get the pinned tag: $calls"
+    assert_log_not_contains "--pull"
+    cmp -s "${DIR}/.env" "${T}/before.env" || fail ".env changed on disk"
+}
+
+test_a_digested_image_is_not_tagged() {
+    STUB_REPO_DIGESTS="ghcr.io/mrtheroi/memry-server@sha256:aaa111"
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    assert_log_not_contains "docker tag "
+}
+
+test_fails_clearly_when_the_local_pin_tag_cannot_be_created() {
+    STUB_TAG_STATUS=1
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 1
+    assert_output_contains "could not tag"
 }
 
 test_the_callers_memry_image_cannot_change_compose() {
