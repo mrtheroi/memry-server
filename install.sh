@@ -22,6 +22,7 @@ MEMRY_VERSION="${MEMRY_VERSION:-0.18.1}"
 MIN_CLI_VERSION="0.7.0"
 DEFAULT_IMAGE="ghcr.io/mrtheroi/memry-server:${MEMRY_VERSION}"
 RAW_BASE="https://raw.githubusercontent.com/mrtheroi/memry-server/v${MEMRY_VERSION}"
+SELF_HOSTING_DOCS="https://github.com/mrtheroi/memry-server/blob/v${MEMRY_VERSION}/docs/self-hosting.md"
 
 usage() {
     cat <<'USAGE'
@@ -88,6 +89,16 @@ parse_args() {
 
 DOCKER_DOCS="https://docs.docker.com/get-docker/"
 
+# is_remote_endpoint <docker endpoint>: a daemon on another machine. Unix
+# sockets, named pipes and tcp to this host are local; an empty endpoint is
+# the default local socket.
+is_remote_endpoint() {
+    case "$1" in
+        '' | unix://* | npipe://* | fd://* | tcp://localhost | tcp://localhost:* | tcp://127.0.0.1 | tcp://127.0.0.1:* | 'tcp://[::1]' | 'tcp://[::1]:'*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
 preflight() {
     command -v docker >/dev/null 2>&1 \
         || die "Docker is not installed. Install Docker (with Compose v2) first: ${DOCKER_DOCS}"
@@ -95,6 +106,18 @@ preflight() {
     compose_major="$(printf '%s' "$compose_version" | sed -n 's/^v\{0,1\}\([0-9][0-9]*\)\..*/\1/p')"
     if [ -z "$compose_major" ] || [ "$compose_major" -lt 2 ]; then
         die "Docker Compose v2 is required (the \`docker compose\` command). See ${DOCKER_DOCS}"
+    fi
+    # As in the docker CLI, DOCKER_CONTEXT wins over DOCKER_HOST, which wins
+    # over the active context.
+    if [ -n "${DOCKER_CONTEXT:-}" ]; then
+        endpoint="$(docker context inspect "$DOCKER_CONTEXT" --format '{{.Endpoints.docker.Host}}' 2>/dev/null)" || endpoint=""
+    elif [ -n "${DOCKER_HOST:-}" ]; then
+        endpoint="$DOCKER_HOST"
+    else
+        endpoint="$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null)" || endpoint=""
+    fi
+    if is_remote_endpoint "$endpoint"; then
+        die "Docker is using a remote Docker daemon (${endpoint}): this installer only installs on the local Docker daemon, because it looks for memry on localhost. To deploy on a server, follow the manual deployment guide: ${SELF_HOSTING_DOCS} (sections \"Manual setup\" and \"Reverse proxy and TLS\")."
     fi
     command -v curl >/dev/null 2>&1 || die "curl is required. Install it with your package manager."
     docker info >/dev/null 2>&1 \
@@ -248,43 +271,54 @@ configure_env() {
 step() { printf '\n==> %s\n' "$*"; }
 
 # compose <args>: docker compose for this install only. Variables exported in
-# the calling shell take precedence over .env in Compose, so every variable the
-# Compose file or .env uses, and every COMPOSE_* one, is unset for the call
-# (except what running docker itself needs: PATH, HOME, DOCKER_*, ...); the
-# project directory and .env are passed explicitly.
+# the calling shell take precedence over .env in Compose, including names that
+# only appear inside .env values (MEMRY_IMAGE=${REGISTRY:-...}). So Compose
+# runs with a minimal environment (env -i) holding only what the docker CLI
+# needs to run and reach its daemon, never COMPOSE_* nor any variable of the
+# Compose file or .env. The project directory and .env are passed explicitly.
 compose() {
     (
-        for name in $(compose_variable_names); do unset "$name"; done
-        exec docker compose --project-directory "$DIR" --env-file "${DIR}/.env" "$@"
+        set -- docker compose --project-directory "$DIR" --env-file "${DIR}/.env" "$@"
+        value=""
+        for name in $(compose_passthrough_names); do
+            # The names come from the allow-list below: safe to eval.
+            eval "value=\${$name}"
+            set -- "$name=$value" "$@"
+        done
+        exec env -i "$@"
     )
 }
 
-compose_variable_names() {
-    {
-        sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*[=:].*/\2/p' "${DIR}/.env"
-        # shellcheck disable=SC2016 # a literal ${NAME reference in the Compose file
-        grep -o '\${[A-Za-z_][A-Za-z0-9_]*' "${DIR}/docker-compose.yml" | sed 's/^\${//'
-        env | sed -n 's/^\(COMPOSE_[A-Za-z0-9_]*\)=.*/\1/p'
-    } | sort -u | grep -v -E '^(PATH|HOME|USER|TMPDIR|DOCKER_[A-Za-z0-9_]*|XDG_[A-Za-z0-9_]*)$'
+# The variables docker needs: working directory (set by the script), executable lookup, config and credential helper
+# location, locale and terminal, ssh agent for ssh:// endpoints, DOCKER_*
+# (host, context, TLS, config) and XDG_* (config directories).
+compose_passthrough_names() {
+    env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' \
+        | grep -E '^(PATH|HOME|PWD|USER|LOGNAME|TMPDIR|TERM|LANG|LC_[A-Z_]+|SSH_AUTH_SOCK|DOCKER_[A-Za-z0-9_]+|XDG_[A-Za-z0-9_]+)$' || true
 }
 
 start_server() {
     cd "$DIR"
-    # The image as Compose resolves it (interpolation included).
-    image="$(compose config --images app 2>/dev/null | tail -n 1)"
-    [ -n "$image" ] || image="$(env_get MEMRY_IMAGE .env)"
-    step "Pulling ${image} and PostgreSQL"
-    if ! compose pull; then
-        docker image inspect "$image" >/dev/null 2>&1 \
-            || die "could not pull ${image}. Check your network and the MEMRY_IMAGE value in ${DIR}/.env."
-        say "Could not pull ${image}; using the local copy."
-    fi
+    # Compose runs under a stripped environment, so it resolves the image names
+    # (interpolation included) but never pulls: credential helpers (ECR, ...)
+    # need the caller's environment. The already-resolved names are pulled with
+    # the plain docker CLI; nothing is left to interpolate.
+    images="$(compose config --images 2>/dev/null | awk 'NF && !seen[$0]++')"
+    [ -n "$images" ] || images="$(env_get MEMRY_IMAGE .env)"
+    step "Pulling the images"
+    for image in $images; do
+        if ! docker pull "$image"; then
+            docker image inspect "$image" >/dev/null 2>&1 \
+                || die "could not pull ${image}. Check your network, your registry login and the MEMRY_IMAGE value in ${DIR}/.env."
+            say "Could not pull ${image}; using the local copy."
+        fi
+    done
 
     step "Running database migrations"
-    compose run --rm migrate || die "migrations failed. See the output above, or run: cd ${QDIR} && docker compose logs postgres"
+    compose run --pull never --rm migrate || die "migrations failed. See the output above, or run: cd ${QDIR} && docker compose logs postgres"
 
     step "Starting memry"
-    compose up -d app scheduler || die "could not start memry. Run: cd ${QDIR} && docker compose logs app"
+    compose up --pull never -d app scheduler || die "could not start memry. Run: cd ${QDIR} && docker compose logs app"
     wait_until_up
 }
 
@@ -299,9 +333,15 @@ published_port() {
     esac
 }
 
+# probe_up <max seconds>: the HTTP status of ${URL}/up ("000" when unreachable).
+probe_up() {
+    curl -s -o /dev/null -w '%{http_code}' --noproxy '*' --max-time "$1" "${URL}/up" || true
+}
+
 # Waits for /up until a wall-clock deadline: slow probes count against the
 # timeout too, and no probe runs past it.
 wait_until_up() {
+    # The local server is probed without any proxy.
     URL="http://localhost:$(published_port)"
     timeout="${MEMRY_UP_TIMEOUT:-120}"
     deadline=$(($(date +%s) + timeout))
@@ -310,7 +350,7 @@ wait_until_up() {
         remaining=$((deadline - $(date +%s)))
         [ "$remaining" -gt 0 ] || break
         [ "$remaining" -le 5 ] || remaining=5
-        if [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time "$remaining" "${URL}/up" || true)" = "200" ]; then
+        if [ "$(probe_up "$remaining")" = "200" ]; then
             say " ready."
             return 0
         fi
@@ -329,11 +369,11 @@ parse_token() {
 # The token only lives in the TOKEN variable: it is never written to disk.
 issue_token() {
     step "Creating a token for ${EMAIL}"
-    token_output="$(compose run --rm -T app token "$EMAIL")" \
+    token_output="$(compose run --pull never --rm -T app token "$EMAIL")" \
         || die "could not create the user and token. Check the logs with: cd ${QDIR} && docker compose logs app"
     TOKEN="$(printf '%s\n' "$token_output" | parse_token)"
     token_output=""
-    [ -n "$TOKEN" ] || die "the server did not print a token. Run it by hand: cd ${QDIR} && docker compose run --rm app token ${EMAIL}"
+    [ -n "$TOKEN" ] || die "the server did not print a token. Run it by hand: cd ${QDIR} && docker compose run --rm app token $(shell_quote "$EMAIL")"
     say "Token created."
 }
 
@@ -429,7 +469,7 @@ Upgrade: set MEMRY_IMAGE in .env to the new release
     docker compose run --rm migrate
     docker compose up -d app scheduler
 
-Docs: https://github.com/mrtheroi/memry-server/blob/v${MEMRY_VERSION}/docs/self-hosting.md
+Docs: ${SELF_HOSTING_DOCS}
 SUMMARY
 }
 

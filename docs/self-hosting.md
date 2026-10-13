@@ -24,7 +24,7 @@ Replace `YOUR_EMAIL` with your email. The command downloads the script to a new 
 1. checks for Docker, Compose v2, curl and a running Docker daemon (it does not install Docker);
 2. downloads that release's `docker-compose.yml` and example `.env` into `~/memry-community`;
 3. writes `.env` (mode 600) with a generated `APP_KEY`, a random `DB_PASSWORD`, `APP_URL`, `APP_PORT` and `MEMRY_IMAGE`;
-4. pulls the images, runs migrations, starts `app` and `scheduler` and waits for `/up`;
+4. pulls the images (`docker pull` in your environment, so credential helpers work for a private `MEMRY_IMAGE`), runs migrations, starts `app` and `scheduler` and waits for `/up`;
 5. creates your user and a token (kept in memory, never written to disk);
 6. installs the [memry CLI](https://github.com/mrtheroi/memry-cli) with Homebrew if it is missing or older than 0.7.0, and runs `memry setup --url http://localhost:<port> --token`, which reads the token from `MEMRY_TOKEN`.
 
@@ -37,6 +37,8 @@ Without Homebrew, with `--no-cli`, or if setup fails, the script prints the toke
 | `--port` | `8000` | Host port; `APP_URL` is `http://localhost:<port>` |
 | `--agents` | asked by `memry setup` | Agents to connect, e.g. `claude-code,codex` |
 | `--no-cli` | | Skip the memry CLI and print the token |
+
+The script only installs on the local Docker daemon. It refuses to run against a remote one (`DOCKER_CONTEXT`, `DOCKER_HOST` or the active `docker context` pointing to `tcp://` somewhere other than localhost, or to `ssh://`; `DOCKER_CONTEXT` wins over `DOCKER_HOST`, as in the docker CLI), because memry would start on that machine while the script looked for it on `localhost`. To deploy on a server, follow [Manual setup](#manual-setup) and [Reverse proxy and TLS](#reverse-proxy-and-tls). Docker Compose runs with a minimal environment (`PATH`, `HOME`, `DOCKER_*`, locale, ssh agent), so variables exported in your shell, including ones referenced inside `.env` values, never change what it starts.
 
 A new `.env` also gets `COMPOSE_PROJECT_NAME`: the directory name plus a checksum of its absolute path (for example `memry-community-1234567890`), so two installs in directories with the same name never share containers or the database volume (`<project>_postgres-data`). It stays the same on every run, and plain `docker compose` commands in the directory use it too. An existing `.env` without it keeps Compose's default project, the directory name, so its volume is not orphaned.
 
