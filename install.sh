@@ -22,6 +22,7 @@ MEMRY_VERSION="${MEMRY_VERSION:-0.18.1}"
 MIN_CLI_VERSION="0.7.0"
 DEFAULT_IMAGE="ghcr.io/mrtheroi/memry-server:${MEMRY_VERSION}"
 RAW_BASE="https://raw.githubusercontent.com/mrtheroi/memry-server/v${MEMRY_VERSION}"
+SELF_HOSTING_DOCS="https://github.com/mrtheroi/memry-server/blob/v${MEMRY_VERSION}/docs/self-hosting.md"
 
 usage() {
     cat <<'USAGE'
@@ -116,7 +117,7 @@ preflight() {
         endpoint="$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null)" || endpoint=""
     fi
     if is_remote_endpoint "$endpoint"; then
-        die "Docker is using a remote Docker daemon (${endpoint}): this installer only installs on the local Docker daemon, because it looks for memry on localhost. To deploy on a server, follow the manual deployment guide: docs/self-hosting.md (sections \"Manual setup\" and \"Reverse proxy and TLS\")."
+        die "Docker is using a remote Docker daemon (${endpoint}): this installer only installs on the local Docker daemon, because it looks for memry on localhost. To deploy on a server, follow the manual deployment guide: ${SELF_HOSTING_DOCS} (sections \"Manual setup\" and \"Reverse proxy and TLS\")."
     fi
     command -v curl >/dev/null 2>&1 || die "curl is required. Install it with your package manager."
     docker info >/dev/null 2>&1 \
@@ -298,21 +299,26 @@ compose_passthrough_names() {
 
 start_server() {
     cd "$DIR"
-    # The image as Compose resolves it (interpolation included).
-    image="$(compose config --images app 2>/dev/null | tail -n 1)"
-    [ -n "$image" ] || image="$(env_get MEMRY_IMAGE .env)"
-    step "Pulling ${image} and PostgreSQL"
-    if ! compose pull; then
-        docker image inspect "$image" >/dev/null 2>&1 \
-            || die "could not pull ${image}. Check your network and the MEMRY_IMAGE value in ${DIR}/.env."
-        say "Could not pull ${image}; using the local copy."
-    fi
+    # Compose runs under a stripped environment, so it resolves the image names
+    # (interpolation included) but never pulls: credential helpers (ECR, ...)
+    # need the caller's environment. The already-resolved names are pulled with
+    # the plain docker CLI; nothing is left to interpolate.
+    images="$(compose config --images 2>/dev/null | awk 'NF && !seen[$0]++')"
+    [ -n "$images" ] || images="$(env_get MEMRY_IMAGE .env)"
+    step "Pulling the images"
+    for image in $images; do
+        if ! docker pull "$image"; then
+            docker image inspect "$image" >/dev/null 2>&1 \
+                || die "could not pull ${image}. Check your network, your registry login and the MEMRY_IMAGE value in ${DIR}/.env."
+            say "Could not pull ${image}; using the local copy."
+        fi
+    done
 
     step "Running database migrations"
-    compose run --rm migrate || die "migrations failed. See the output above, or run: cd ${QDIR} && docker compose logs postgres"
+    compose run --pull never --rm migrate || die "migrations failed. See the output above, or run: cd ${QDIR} && docker compose logs postgres"
 
     step "Starting memry"
-    compose up -d app scheduler || die "could not start memry. Run: cd ${QDIR} && docker compose logs app"
+    compose up --pull never -d app scheduler || die "could not start memry. Run: cd ${QDIR} && docker compose logs app"
     wait_until_up
 }
 
@@ -363,7 +369,7 @@ parse_token() {
 # The token only lives in the TOKEN variable: it is never written to disk.
 issue_token() {
     step "Creating a token for ${EMAIL}"
-    token_output="$(compose run --rm -T app token "$EMAIL")" \
+    token_output="$(compose run --pull never --rm -T app token "$EMAIL")" \
         || die "could not create the user and token. Check the logs with: cd ${QDIR} && docker compose logs app"
     TOKEN="$(printf '%s\n' "$token_output" | parse_token)"
     token_output=""
@@ -463,7 +469,7 @@ Upgrade: set MEMRY_IMAGE in .env to the new release
     docker compose run --rm migrate
     docker compose up -d app scheduler
 
-Docs: https://github.com/mrtheroi/memry-server/blob/v${MEMRY_VERSION}/docs/self-hosting.md
+Docs: ${SELF_HOSTING_DOCS}
 SUMMARY
 }
 
