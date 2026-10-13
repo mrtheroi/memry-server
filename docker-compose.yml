@@ -14,6 +14,9 @@
 x-app: &app
   image: ${MEMRY_IMAGE:-memry-server:local}
   build: .
+  # `missing` by default; install.sh sets `never` (Compose pulls `latest` and
+  # untagged images even with `missing`).
+  pull_policy: ${MEMRY_PULL_POLICY:-missing}
   restart: unless-stopped
   environment: &app-env
     APP_NAME: ${APP_NAME:-memry}

@@ -51,7 +51,7 @@ if [ "${1:-}" = compose ]; then
     set -- compose "$@"
     echo "compose flags:${flags}" >> "$STUB_LOG"
     # `compose version` (the preflight) reads no project.
-    [ "${2:-}" = version ] || echo "compose env: COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME-unset} DB_PASSWORD=${DB_PASSWORD-unset} APP_PORT=${APP_PORT-unset} REGISTRY=${REGISTRY-unset} DOCKER_CONTEXT=${DOCKER_CONTEXT-unset} AWS_PROFILE=${AWS_PROFILE-unset}" >> "$STUB_LOG"
+    [ "${2:-}" = version ] || echo "compose env: COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME-unset} DB_PASSWORD=${DB_PASSWORD-unset} APP_PORT=${APP_PORT-unset} REGISTRY=${REGISTRY-unset} DOCKER_CONTEXT=${DOCKER_CONTEXT-unset} AWS_PROFILE=${AWS_PROFILE-unset} MEMRY_PULL_POLICY=${MEMRY_PULL_POLICY-unset}" >> "$STUB_LOG"
 fi
 echo "docker $* @ $(pwd)" >> "$STUB_LOG"
 case "$*" in
@@ -448,6 +448,25 @@ test_compose_commands_work_on_older_compose_v2() {
     run_install --email you@example.com --dir "$DIR" --no-cli
     assert_status 0
     assert_log_not_contains "--pull"
+}
+
+# Compose always pulls the `latest` tag (or an untagged image) even with the
+# `missing` pull policy, so the installer sets MEMRY_PULL_POLICY=never itself
+# (docker-compose.yml: pull_policy: ${MEMRY_PULL_POLICY:-missing}).
+test_every_compose_call_runs_with_pull_policy_never() {
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    assert_log_contains "MEMRY_PULL_POLICY=never"
+    assert_log_not_contains "MEMRY_PULL_POLICY=unset"
+    assert_log_not_contains "MEMRY_PULL_POLICY=always"
+}
+
+test_the_callers_pull_policy_does_not_override_never() {
+    AMBIENT_ENV="MEMRY_PULL_POLICY=always"
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    assert_log_contains "MEMRY_PULL_POLICY=never"
+    assert_log_not_contains "MEMRY_PULL_POLICY=always"
 }
 
 test_fails_with_a_hint_when_the_server_never_comes_up() {

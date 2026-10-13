@@ -276,6 +276,9 @@ step() { printf '\n==> %s\n' "$*"; }
 # runs with a minimal environment (env -i) holding only what the docker CLI
 # needs to run and reach its daemon, never COMPOSE_* nor any variable of the
 # Compose file or .env. The project directory and .env are passed explicitly.
+# MEMRY_PULL_POLICY=never is set here (never taken from the caller): Compose
+# re-pulls an untagged or :latest image even with the default `missing`
+# policy, and the images are already local.
 compose() {
     (
         set -- docker compose --project-directory "$DIR" --env-file "${DIR}/.env" "$@"
@@ -285,7 +288,7 @@ compose() {
             eval "value=\${$name}"
             set -- "$name=$value" "$@"
         done
-        exec env -i "$@"
+        exec env -i MEMRY_PULL_POLICY=never "$@"
     )
 }
 
