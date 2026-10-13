@@ -243,32 +243,40 @@ The install script has two more tests, both run by the same workflow:
 
 ## Verifying releases
 
-Release artifacts are signed keyless with [cosign](https://docs.sigstore.dev/cosign/): the signing identity is the `docker.yml` run of the release tag, not a key. Replace `<version>` with the release (for example `0.19.0`) and `<digest>` with the image digest (`docker buildx imagetools inspect ghcr.io/mrtheroi/memry-server:<version>` prints it).
+Release artifacts are signed keyless with [cosign](https://docs.sigstore.dev/cosign/): the signing identity is the `docker.yml` run of the release tag, not a key. Use cosign v3.1.3 or later (v2.6.5 or later on the v2 line); older versions accept a forged legacy bundle ([GHSA-fx35-mq7g-6g98](https://github.com/sigstore/cosign/security/advisories/GHSA-fx35-mq7g-6g98)).
 
-The image, signed by digest. The image index also carries SBOM and provenance attestations:
+The identity is pinned to the exact tag you are installing, so an older release that was also signed by this workflow cannot be passed off as the requested one. Set the version once:
 
 ```sh
-cosign verify ghcr.io/mrtheroi/memry-server@<digest> \
-  --certificate-identity-regexp '^https://github\.com/mrtheroi/memry-server/\.github/workflows/docker\.yml@refs/tags/v.+$' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+VERSION=0.19.0
+IDENTITY="https://github.com/mrtheroi/memry-server/.github/workflows/docker.yml@refs/tags/v${VERSION}"
+ISSUER=https://token.actions.githubusercontent.com
 ```
 
-The installer files. The release for the tag has `SHA256SUMS` (for `install.sh`, `docker-compose.yml` and `docker/community.env.example`) and its bundle `SHA256SUMS.sigstore.json`:
+The image, signed by digest. The image index also carries SBOM and provenance attestations. `docker buildx imagetools inspect ghcr.io/mrtheroi/memry-server:${VERSION}` prints the digest:
 
 ```sh
-mkdir -p memry-verify/docker && cd memry-verify
-base=https://raw.githubusercontent.com/mrtheroi/memry-server/v<version>
-for f in install.sh docker-compose.yml docker/community.env.example; do curl -fsSL -o "$f" "$base/$f"; done
-rel=https://github.com/mrtheroi/memry-server/releases/download/v<version>
-curl -fsSLO "$rel/SHA256SUMS" && curl -fsSLO "$rel/SHA256SUMS.sigstore.json"
+cosign verify "ghcr.io/mrtheroi/memry-server@<digest>" \
+  --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER"
+```
 
+The installer files. The release for the tag has `SHA256SUMS` (for `install.sh`, `docker-compose.yml` and `docker/community.env.example`) and its bundle `SHA256SUMS.sigstore.json`. Each step runs only if the previous one succeeded, so a failed signature check never reaches the checksum check:
+
+```sh
+mkdir -p memry-verify/docker && cd memry-verify &&
+base="https://raw.githubusercontent.com/mrtheroi/memry-server/v${VERSION}" &&
+rel="https://github.com/mrtheroi/memry-server/releases/download/v${VERSION}" &&
+curl -fsSL -o install.sh "$base/install.sh" &&
+curl -fsSL -o docker-compose.yml "$base/docker-compose.yml" &&
+curl -fsSL -o docker/community.env.example "$base/docker/community.env.example" &&
+curl -fsSLO "$rel/SHA256SUMS" && curl -fsSLO "$rel/SHA256SUMS.sigstore.json" &&
 cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json \
-  --certificate-identity-regexp '^https://github\.com/mrtheroi/memry-server/\.github/workflows/docker\.yml@refs/tags/v.+$' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com
-sha256sum -c SHA256SUMS
+  --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" &&
+sha256sum -c SHA256SUMS &&
+echo "memry ${VERSION}: installer files verified"
 ```
 
-On macOS use `shasum -a 256 -c SHA256SUMS`.
+On macOS replace `sha256sum -c` with `shasum -a 256 -c`. Only trust the files if the last line prints.
 
 ## Releasing (maintainers)
 
