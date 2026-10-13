@@ -95,13 +95,15 @@ test('deleting a team cascades its observations, prompts and tokens', function (
         ->and(DB::table('personal_access_tokens')->count())->toBe(0);
 });
 
-test('every new foreign key is added NOT VALID', function () {
+// Structural pin of the schema's end state, not a golden: the FKs are added
+// NOT VALID by the column migrations and flipped by validate_team_foreign_keys.
+test('every new foreign key is validated', function () {
     foreach (TEAM_FKS as [$table, $column]) {
         $validated = DB::selectOne(
             'select convalidated from pg_constraint where conname = ?',
             ["{$table}_{$column}_foreign"],
         );
-        expect($validated?->convalidated)->toBeFalse("{$table}.{$column}");
+        expect($validated?->convalidated)->toBeTrue("{$table}.{$column}");
     }
 });
 
@@ -166,10 +168,10 @@ test('rows accept a project of their own team, or no project', function () {
         ->and(DB::table('user_prompts')->count())->toBe(2);
 });
 
-test('the composite team-project foreign keys are added NOT VALID', function () {
+test('the composite team-project foreign keys are validated', function () {
     foreach (['observations', 'user_prompts'] as $table) {
         $validated = DB::selectOne('select convalidated from pg_constraint where conname = ?', ["{$table}_project_team_foreign"]);
-        expect($validated?->convalidated)->toBeFalse($table);
+        expect($validated?->convalidated)->toBeTrue($table);
     }
 });
 
@@ -185,4 +187,8 @@ test('deleting a project nulls project_id even when the rows carry its team', fu
     $prompt = DB::table('user_prompts')->sole();
     expect($observation->project_id)->toBeNull()->and($observation->team_id)->toBe($project->team_id)
         ->and($prompt->project_id)->toBeNull()->and($prompt->team_id)->toBe($project->team_id);
+});
+
+test('the foreign key validation migration runs outside a transaction', function () {
+    expect(teamIndexMigration('validate_team_foreign_keys')->withinTransaction)->toBeFalse();
 });
