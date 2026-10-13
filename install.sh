@@ -36,8 +36,6 @@ Options:
   --port PORT        Host port of the server (default: 8000)
   --agents LIST      Agents to connect, comma-separated (e.g. claude-code,codex);
                      without it, memry setup asks
-  --url URL          Address where the server is reachable, for a Docker daemon on
-                     another machine (e.g. http://10.0.0.5:8000); needed with it
   --no-cli           Do not install or run the memry CLI; print the token instead
   -h, --help         Show this help
 
@@ -57,8 +55,6 @@ parse_args() {
     EMAIL=""
     DIR="${HOME}/memry-community"
     PORT=""
-    PUBLIC_URL=""
-    URL_GIVEN=0
     AGENTS=""
     INSTALL_CLI=1
     while [ $# -gt 0 ]; do
@@ -72,19 +68,11 @@ parse_args() {
             --port=*) PORT="${1#*=}" ;;
             --agents) [ $# -ge 2 ] || usage_error "--agents needs a value"; AGENTS="$2"; shift ;;
             --agents=*) AGENTS="${1#*=}" ;;
-            --url) [ $# -ge 2 ] || usage_error "--url needs a value"; PUBLIC_URL="$2"; URL_GIVEN=1; shift ;;
-            --url=*) PUBLIC_URL="${1#*=}"; URL_GIVEN=1 ;;
             --no-cli) INSTALL_CLI=0 ;;
             *) usage_error "unknown option: $1" ;;
         esac
         shift
     done
-    if [ "$URL_GIVEN" = 1 ]; then
-        case "$PUBLIC_URL" in
-            http://?* | https://?*) PUBLIC_URL="${PUBLIC_URL%/}" ;;
-            *) usage_error "--url must be an http:// or https:// address" ;;
-        esac
-    fi
     [ -n "$PORT" ] || PORT=8000
     case "$PORT" in
         # At most 5 digits, so the range check below cannot overflow.
@@ -118,11 +106,17 @@ preflight() {
     if [ -z "$compose_major" ] || [ "$compose_major" -lt 2 ]; then
         die "Docker Compose v2 is required (the \`docker compose\` command). See ${DOCKER_DOCS}"
     fi
-    # DOCKER_HOST wins over the active context, as in the docker CLI.
-    endpoint="${DOCKER_HOST:-}"
-    [ -n "$endpoint" ] || endpoint="$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null)" || endpoint=""
-    if [ -z "$PUBLIC_URL" ] && is_remote_endpoint "$endpoint"; then
-        die "Docker is using a remote Docker daemon (${endpoint}): memry would run on that machine, not here, and this script would look for it on localhost. Use a local Docker, or pass --url with the address where that machine's port will be reachable (for example --url http://HOST:8000)."
+    # As in the docker CLI, DOCKER_CONTEXT wins over DOCKER_HOST, which wins
+    # over the active context.
+    if [ -n "${DOCKER_CONTEXT:-}" ]; then
+        endpoint="$(docker context inspect "$DOCKER_CONTEXT" --format '{{.Endpoints.docker.Host}}' 2>/dev/null)" || endpoint=""
+    elif [ -n "${DOCKER_HOST:-}" ]; then
+        endpoint="$DOCKER_HOST"
+    else
+        endpoint="$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null)" || endpoint=""
+    fi
+    if is_remote_endpoint "$endpoint"; then
+        die "Docker is using a remote Docker daemon (${endpoint}): this installer only installs on the local Docker daemon, because it looks for memry on localhost. To deploy on a server, follow the manual deployment guide: docs/self-hosting.md (sections \"Manual setup\" and \"Reverse proxy and TLS\")."
     fi
     command -v curl >/dev/null 2>&1 || die "curl is required. Install it with your package manager."
     docker info >/dev/null 2>&1 \
@@ -269,7 +263,7 @@ configure_env() {
     env_has MEMRY_IMAGE "$env_file" || env_set MEMRY_IMAGE "${MEMRY_IMAGE:-$DEFAULT_IMAGE}" "$env_file"
     env_has APP_KEY "$env_file" || env_set APP_KEY "$(generate_app_key)" "$env_file"
     env_has APP_PORT "$env_file" || env_set APP_PORT "$PORT" "$env_file"
-    env_has APP_URL "$env_file" || env_set APP_URL "${PUBLIC_URL:-http://localhost:$(env_get APP_PORT "$env_file")}" "$env_file"
+    env_has APP_URL "$env_file" || env_set APP_URL "http://localhost:$(env_get APP_PORT "$env_file")" "$env_file"
     env_has DB_PASSWORD "$env_file" || env_set DB_PASSWORD "$(generate_password)" "$env_file"
 }
 
@@ -335,19 +329,14 @@ published_port() {
 
 # probe_up <max seconds>: the HTTP status of ${URL}/up ("000" when unreachable).
 probe_up() {
-    if [ -n "$PUBLIC_URL" ]; then
-        curl -s -o /dev/null -w '%{http_code}' --max-time "$1" "${URL}/up" || true
-    else
-        curl -s -o /dev/null -w '%{http_code}' --noproxy '*' --max-time "$1" "${URL}/up" || true
-    fi
+    curl -s -o /dev/null -w '%{http_code}' --noproxy '*' --max-time "$1" "${URL}/up" || true
 }
 
 # Waits for /up until a wall-clock deadline: slow probes count against the
 # timeout too, and no probe runs past it.
 wait_until_up() {
-    # A local server is probed without any proxy; a --url one with the
-    # caller's proxy settings, since it may only be reachable through them.
-    if [ -n "$PUBLIC_URL" ]; then URL="$PUBLIC_URL"; else URL="http://localhost:$(published_port)"; fi
+    # The local server is probed without any proxy.
+    URL="http://localhost:$(published_port)"
     timeout="${MEMRY_UP_TIMEOUT:-120}"
     deadline=$(($(date +%s) + timeout))
     printf 'Waiting for %s/up' "$URL"

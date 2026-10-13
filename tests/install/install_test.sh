@@ -72,7 +72,14 @@ case "$*" in
         port="${STUB_PUBLISHED_PORT:-$(sed -n 's/^APP_PORT="*\([0-9]*\).*/\1/p' .env | tail -n 1)}"
         echo "0.0.0.0:${port:-8000}"
         ;;
-    "context inspect"*) echo "${STUB_CONTEXT_HOST:-}" ;;
+    "context inspect"*)
+        # A named context ("context inspect NAME --format ...") reads the file
+        # "${STUB_LOG}.context.NAME"; without a name, the active context.
+        case "${3:-}" in
+            --*) echo "${STUB_CONTEXT_HOST:-}" ;;
+            *) cat "${STUB_LOG}.context.${3}" 2>/dev/null || exit 1 ;;
+        esac
+        ;;
     "volume inspect"*)
         [ "${3:-}" = "${STUB_EXISTING_VOLUME:-}" ] && exit 0
         exit "${STUB_VOLUME_STATUS:-1}"
@@ -677,23 +684,41 @@ test_compose_ignores_variables_referenced_in_env_values() {
     assert_log_contains "DOCKER_CONTEXT=desktop"
 }
 
-test_refuses_a_remote_docker_host_without_url() {
+test_refuses_a_remote_docker_host() {
     AMBIENT_ENV="DOCKER_HOST=tcp://10.0.0.5:2376"
     run_install --email you@example.com --dir "$DIR" --no-cli
     assert_status 1
     assert_output_contains "remote Docker daemon (tcp://10.0.0.5:2376)"
-    assert_output_contains "--url"
+    assert_output_contains "docs/self-hosting.md"
+    assert_output_contains "Manual setup"
     assert_log_not_contains "compose pull"
     [ ! -e "${DIR}/.env" ] || fail ".env was created"
 }
 
-test_refuses_a_remote_docker_context_without_url() {
+test_refuses_a_remote_docker_context() {
     STUB_CONTEXT_HOST="ssh://deploy@build.example.com"
     run_install --email you@example.com --dir "$DIR" --no-cli
     assert_status 1
     assert_output_contains "remote Docker daemon (ssh://deploy@build.example.com)"
+    assert_output_contains "docs/self-hosting.md"
     assert_log_contains "docker context inspect --format {{.Endpoints.docker.Host}}"
     assert_log_not_contains "compose pull"
+}
+
+test_docker_context_overrides_docker_host_when_remote() {
+    printf 'ssh://deploy@build.example.com\n' > "${STUB_LOG}.context.remote"
+    AMBIENT_ENV="DOCKER_HOST=unix:///var/run/docker.sock DOCKER_CONTEXT=remote"
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 1
+    assert_output_contains "remote Docker daemon (ssh://deploy@build.example.com)"
+    assert_log_not_contains "compose pull"
+}
+
+test_docker_context_overrides_docker_host_when_local() {
+    printf 'unix:///var/run/docker.sock\n' > "${STUB_LOG}.context.local"
+    AMBIENT_ENV="DOCKER_HOST=tcp://10.0.0.5:2376 DOCKER_CONTEXT=local"
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
 }
 
 test_local_docker_endpoints_are_accepted() {
@@ -708,25 +733,10 @@ test_local_docker_endpoints_are_accepted() {
     assert_status 0
 }
 
-test_a_remote_docker_daemon_is_allowed_with_an_explicit_url() {
-    AMBIENT_ENV="DOCKER_HOST=tcp://10.0.0.5:2376 http_proxy=http://proxy:3128"
-    run_install --email you@example.com --dir "$DIR" --no-cli --url http://10.0.0.5:8000/
-    assert_status 0
-    assert_log_contains "docker compose up -d app scheduler"
-    assert_log_contains "http://10.0.0.5:8000/up"
-    assert_log_not_contains "--noproxy"
-    assert_log_not_contains "localhost"
-    assert_output_contains "memry setup --url http://10.0.0.5:8000 --token"
-    assert_output_contains "memry is running at http://10.0.0.5:8000"
-    [ "$(env_value APP_URL)" = "http://10.0.0.5:8000" ] || fail "APP_URL is $(env_value APP_URL)"
-}
-
-test_rejects_a_url_that_is_not_http() {
-    for url in 10.0.0.5:8000 ftp://host ""; do
-        run_install --email you@example.com --url "$url"
-        assert_status 2
-        assert_output_contains "--url must be an http:// or https:// address"
-    done
+test_url_option_is_not_supported() {
+    run_install --email you@example.com --url http://10.0.0.5:8000
+    assert_status 2
+    assert_output_contains "unknown option: --url"
 }
 
 test_reads_env_values_with_inline_comments_like_compose() {
