@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **Signed releases** (#31): on a release tag the image is signed by digest with keyless cosign and pushed with SBOM and max-detail provenance attestations, and `SHA256SUMS` for `install.sh` and the files it downloads is signed (`SHA256SUMS.sigstore.json`) and attached to the GitHub release. See "Verifying releases" in `docs/self-hosting.md`
+- **Attested releases** (#31): on a release tag the image is pushed with SBOM and max-detail provenance attestations, and the image digest and the installer files (`install.sh`, `docker-compose.yml`, `docker/community.env.example`) get GitHub artifact attestations (SLSA build provenance, Sigstore keyless), verifiable with `gh attestation verify`. See "Verifying releases" in `docs/self-hosting.md`
 
 ### Fixed
 

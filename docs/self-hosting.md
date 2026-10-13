@@ -243,46 +243,53 @@ The install script has two more tests, both run by the same workflow:
 
 ## Verifying releases
 
-Release artifacts are signed keyless with [cosign](https://docs.sigstore.dev/cosign/): the signing identity is the `docker.yml` run of the release tag, not a key. Use cosign v3.1.3 or later (v2.6.5 or later on the v2 line); older versions accept a forged legacy bundle ([GHSA-fx35-mq7g-6g98](https://github.com/sigstore/cosign/security/advisories/GHSA-fx35-mq7g-6g98)).
+The image and the installer files (`install.sh`, `docker-compose.yml` and `docker/community.env.example`) carry [GitHub artifact attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds): SLSA build provenance, signed keyless with Sigstore and recorded in the public transparency log. They are made by the `docker.yml` run of the release tag, not by a key. Verifying needs the [GitHub CLI](https://cli.github.com/) (`gh`) 2.51 or later.
 
-The identity is pinned to the exact tag you are installing, so an older release that was also signed by this workflow cannot be passed off as the requested one. Set the version once:
+Every command pins the exact tag you are installing (`--source-ref`) and the workflow that built it (`--signer-workflow`), so an older release or another workflow cannot be passed off as the requested one. Set the version once:
 
 ```sh
 VERSION=0.19.0
-IDENTITY="https://github.com/mrtheroi/memry-server/.github/workflows/docker.yml@refs/tags/v${VERSION}"
-ISSUER=https://token.actions.githubusercontent.com
 ```
 
-The image, signed by digest. The image index also carries SBOM and provenance attestations. `docker buildx imagetools inspect ghcr.io/mrtheroi/memry-server:${VERSION}` prints the digest:
+The image, verified by digest. `docker buildx imagetools inspect ghcr.io/mrtheroi/memry-server:${VERSION}` prints the digest (`Digest: sha256:...`):
 
 ```sh
-cosign verify "ghcr.io/mrtheroi/memry-server@<digest>" \
-  --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER"
+gh attestation verify "oci://ghcr.io/mrtheroi/memry-server@<digest>" \
+  --repo mrtheroi/memry-server \
+  --source-ref "refs/tags/v${VERSION}" \
+  --signer-workflow mrtheroi/memry-server/.github/workflows/docker.yml
 ```
 
-The installer files. The release for the tag has `SHA256SUMS` (for `install.sh`, `docker-compose.yml` and `docker/community.env.example`) and its bundle `SHA256SUMS.sigstore.json`. Each step runs only if the previous one succeeded, so a failed signature check never reaches the checksum check:
+The installer files. Each step runs only if the previous one succeeded, so a failed check stops the chain:
 
 ```sh
 mkdir -p memry-verify/docker && cd memry-verify &&
 base="https://raw.githubusercontent.com/mrtheroi/memry-server/v${VERSION}" &&
-rel="https://github.com/mrtheroi/memry-server/releases/download/v${VERSION}" &&
 curl -fsSL -o install.sh "$base/install.sh" &&
 curl -fsSL -o docker-compose.yml "$base/docker-compose.yml" &&
 curl -fsSL -o docker/community.env.example "$base/docker/community.env.example" &&
-curl -fsSLO "$rel/SHA256SUMS" && curl -fsSLO "$rel/SHA256SUMS.sigstore.json" &&
-cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json \
-  --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" &&
-sha256sum -c SHA256SUMS &&
+gh attestation verify install.sh \
+  --repo mrtheroi/memry-server \
+  --source-ref "refs/tags/v${VERSION}" \
+  --signer-workflow mrtheroi/memry-server/.github/workflows/docker.yml &&
+gh attestation verify docker-compose.yml \
+  --repo mrtheroi/memry-server \
+  --source-ref "refs/tags/v${VERSION}" \
+  --signer-workflow mrtheroi/memry-server/.github/workflows/docker.yml &&
+gh attestation verify docker/community.env.example \
+  --repo mrtheroi/memry-server \
+  --source-ref "refs/tags/v${VERSION}" \
+  --signer-workflow mrtheroi/memry-server/.github/workflows/docker.yml &&
 echo "memry ${VERSION}: installer files verified"
 ```
 
-On macOS replace `sha256sum -c` with `shasum -a 256 -c`. Only trust the files if the last line prints.
+Only trust the files if the last line prints.
 
 ## Releasing (maintainers)
 
 Bump `MEMRY_VERSION` in `install.sh` with `config/api.php`, the README and the CHANGELOG; the unit tests fail otherwise. The install command in the docs points at the tag, so it works once the tag and its image are published.
 
-Pushing a `vX.Y.Z` tag runs `.github/workflows/docker.yml`: it runs the install script checks, smoke tests the image, runs the install script end to end, then publishes the immutable `X.Y.Z` tag to `ghcr.io/mrtheroi/memry-server`, signs the image digest with cosign and attaches signed installer checksums to the GitHub release (created if missing). There are no floating `X.Y` tags. Every tag gets its own run; runs for different tags are neither queued behind each other nor cancelled.
+Pushing a `vX.Y.Z` tag runs `.github/workflows/docker.yml`: it runs the install script checks, smoke tests the image, runs the install script end to end, then publishes the immutable `X.Y.Z` tag to `ghcr.io/mrtheroi/memry-server`, attests the image digest, and attests the installer files (`install.sh`, `docker-compose.yml`, `docker/community.env.example`). The attestations are GitHub build provenance (SLSA, Sigstore keyless); they appear under the repository's Attestations tab and need no GitHub release. There are no floating `X.Y` tags. Every tag gets its own run; runs for different tags are neither queued behind each other nor cancelled.
 
 `latest` is moved by the last step of the run, after `X.Y.Z` is pushed. That step lists the repository's tags again and points `latest` at `X.Y.Z` only if it is the highest stable `vX.Y.Z` tag at that moment, so an older or backport tag normally does not take it over. If the smoke test or the push fails, `latest` stays where it was.
 
