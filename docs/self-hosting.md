@@ -123,7 +123,7 @@ The image entrypoint accepts these commands (`docker compose run --rm app <comma
 | Command | Effect |
 | --- | --- |
 | `serve` (default) | Caches config, routes and views, then starts FrankenPHP |
-| `migrate` | `php artisan migrate --force --isolated` |
+| `migrate` | `php artisan memory:migrate` (migrations under a PostgreSQL advisory lock) |
 | `scheduler` | `php artisan schedule:work` |
 | `token <email>` | Creates the user if needed and prints a new token |
 | `key` | Prints a new `APP_KEY` |
@@ -136,6 +136,8 @@ Every command except `key` and the raw `php`, `sh`, `bash` and `frankenphp` comm
 
 Set `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD` (and `DB_SSLMODE`, for example `require`) in `.env`, then remove the `postgres` service and the `depends_on` block from your copy of `docker-compose.yml`. The database must exist; migrations create the tables.
 
+Migrations need a direct PostgreSQL connection or a session-pooled one. Transaction or statement pooling (for example PgBouncer in transaction mode, or the Supabase/Neon pooler URLs) is not supported: `memory:migrate` relies on a session advisory lock, which such poolers cannot keep on one backend session, and it fails with an error when it detects that. Use the provider's direct connection string for `DB_HOST`.
+
 ## Migrations
 
 Run migrations after the first install and after every upgrade:
@@ -144,7 +146,7 @@ Run migrations after the first install and after every upgrade:
 docker compose run --rm migrate
 ```
 
-Alternatively set `AUTO_MIGRATE=true` so `app` migrates before it starts serving. Once the database is initialised, migrations take a database lock, so several containers starting at once do not run them twice. On a brand-new database the cache table that holds that lock is created first, without the lock, so concurrent first migrations can race: for the first deployment, run `docker compose run --rm migrate` once before starting several `app` containers with `AUTO_MIGRATE=true`.
+Alternatively set `AUTO_MIGRATE=true` so `app` migrates before it starts serving. Migrations run under a PostgreSQL advisory lock (`php artisan memory:migrate`): containers starting at once wait for the first one to finish and then find nothing left to migrate, including on a brand-new database.
 
 ## Users and tokens
 

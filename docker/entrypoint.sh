@@ -26,10 +26,10 @@ require_configuration() {
 }
 
 migrate() {
-    # --isolated takes its lock in the database cache store, whose cache_locks
-    # table does not exist on a fresh database: create it first (no-op later).
-    php artisan migrate --force --path=database/migrations/0001_01_01_000001_create_cache_table.php
-    php artisan migrate --force --isolated
+    # memory:migrate holds a PostgreSQL advisory lock while it migrates, so
+    # containers starting together queue up instead of racing, even on a
+    # brand-new database.
+    php artisan memory:migrate
 }
 
 # Self-healing: an older app still running during an upgrade can write rows
