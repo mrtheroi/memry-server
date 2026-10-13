@@ -47,8 +47,10 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         Sanctum::usePersonalAccessTokenModel(PersonalAccessToken::class);
+        Sanctum::authenticateAccessTokensUsing(fn (PersonalAccessToken $token, bool $isValid) => $isValid && ! $token->isIdle());
 
         RateLimiter::for('mcp', fn (Request $request) => Limit::perMinute(60)->by($request->user()->id));
+        RateLimiter::for('auth-tokens', fn (Request $request) => Limit::perMinute(10)->by($request->user()->id));
         RateLimiter::for('auth-code', function (Request $request) {
             $email = $request->input('email');
 

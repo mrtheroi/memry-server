@@ -15,7 +15,11 @@ Security notes for memry-server. See [API](api.md) for the endpoints they apply 
 ## Tokens
 
 - Only the SHA-256 hash of each token is stored.
-- A leaked token is revoked with `php artisan memory:revoke <email>` (every token of the user); a client can revoke its own token with `DELETE /api/auth/token`.
+- A leaked token is revoked with `php artisan memory:revoke <email>` (every token of the user); a client can revoke its own token with `DELETE /api/auth/token`, or any one of its user's tokens with `DELETE /api/auth/tokens/{id}` (`GET /api/auth/tokens` lists them without secrets).
+- A token expires after 30 days without use (`MEMRY_TOKEN_IDLE_DAYS`, default 30); a token used regularly never expires. The window counts from `last_used_at`, or from creation if it was never used. An expired token gets the same `401 {"message":"Unauthenticated."}` as an invalid one.
+- Optional absolute lifetime since creation: set `expiration` (minutes) in `config/sanctum.php`; it is `null` (off) by default and combines with the idle window (the earliest wins).
+- `memory:prune-tokens` deletes expired tokens and runs daily from the scheduler.
+- Sanctum updates `last_used_at` on every authenticated request (one small UPDATE per request).
 
 ## Login codes
 
@@ -33,3 +37,4 @@ Beyond these limits the server returns 429.
 | `/mcp/memory`, `/api/context` and `DELETE /api/account` (shared) | 60 requests per minute per user |
 | `POST /api/auth/code` | 3 requests per 10 minutes per email, and 10 per hour per IP |
 | `POST /api/auth/token` | 20 requests per minute per IP |
+| `GET /api/auth/tokens`, `DELETE /api/auth/tokens/{id}` and `DELETE /api/auth/token` (shared) | 10 requests per minute per user |
