@@ -241,11 +241,43 @@ The install script has two more tests, both run by the same workflow:
 - `sh tests/install/install_test.sh` unit tests `install.sh` with stubbed `docker`, `curl`, `memry` and `brew` (no Docker needed). It also fails when the version pinned in `install.sh` is not the latest release in the CHANGELOG, so bump both together.
 - `MEMRY_IMAGE=<image> docker/install-e2e.sh` runs `install.sh --no-cli` twice against a real image, with the Compose and env files of the checkout (`MEMRY_SOURCE_DIR`), and checks `/up`, the MCP tools that `APP_KEY` and `DB_PASSWORD` survive the second run, and that a run without `.env` refuses to reuse the existing database volume.
 
+## Verifying releases
+
+The image and the installer files (`install.sh`, `docker-compose.yml` and `docker/community.env.example`) carry [GitHub artifact attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds): SLSA build provenance, signed keyless with Sigstore and recorded in the public transparency log. They are made by the `docker.yml` run of the release tag, not by a key.
+
+Verifying needs the [GitHub CLI](https://cli.github.com/) (`gh`) **2.102.0 or later**, logged in to any GitHub account (`gh auth login`, or `GH_TOKEN` in CI). Older versions either lack `--source-ref` or match `--signer-workflow` as a prefix ([GHSA-wjmr-j3rp-mh2g](https://github.com/cli/cli/security/advisories/GHSA-wjmr-j3rp-mh2g)).
+
+Every check pins the exact tag you are installing (`--source-ref`) and the workflow that built it (`--signer-workflow`), so an older release or another workflow cannot be passed off as the requested one. The install then uses exactly what was verified: the downloaded files (`MEMRY_SOURCE_DIR`) and the image by digest (`MEMRY_IMAGE=...@sha256:...`), never the tag again, so a tag moved after the check cannot change what runs. Each step runs only if the previous one succeeded:
+
+```sh
+VERSION=0.19.0
+verify() {
+  gh attestation verify "$1" \
+    --repo mrtheroi/memry-server \
+    --source-ref "refs/tags/v${VERSION}" \
+    --signer-workflow mrtheroi/memry-server/.github/workflows/docker.yml
+}
+
+mkdir -p memry-verify/docker && cd memry-verify &&
+base="https://raw.githubusercontent.com/mrtheroi/memry-server/v${VERSION}" &&
+curl -fsSL -o install.sh "$base/install.sh" &&
+curl -fsSL -o docker-compose.yml "$base/docker-compose.yml" &&
+curl -fsSL -o docker/community.env.example "$base/docker/community.env.example" &&
+verify install.sh && verify docker-compose.yml && verify docker/community.env.example &&
+DIGEST="$(docker buildx imagetools inspect "ghcr.io/mrtheroi/memry-server:${VERSION}" | awk '/^Digest:/ {print $2}')" &&
+[ -n "$DIGEST" ] &&
+verify "oci://ghcr.io/mrtheroi/memry-server@${DIGEST}" &&
+echo "memry ${VERSION}: verified (image ${DIGEST})" &&
+MEMRY_SOURCE_DIR="$PWD" MEMRY_IMAGE="ghcr.io/mrtheroi/memry-server@${DIGEST}" sh ./install.sh
+```
+
+On a first install the installer writes that digest to `.env` (an existing `.env` keeps its `MEMRY_IMAGE`). For a verified upgrade, run the same `verify` checks for the new version and set `MEMRY_IMAGE=ghcr.io/mrtheroi/memry-server@<verified digest>` in `.env` instead of the tag.
+
 ## Releasing (maintainers)
 
 Bump `MEMRY_VERSION` in `install.sh` with `config/api.php`, the README and the CHANGELOG; the unit tests fail otherwise. The install command in the docs points at the tag, so it works once the tag and its image are published.
 
-Pushing a `vX.Y.Z` tag runs `.github/workflows/docker.yml`: it runs the install script checks, smoke tests the image, runs the install script end to end, then publishes the immutable `X.Y.Z` tag to `ghcr.io/mrtheroi/memry-server`. There are no floating `X.Y` tags. Every tag gets its own run; runs for different tags are neither queued behind each other nor cancelled.
+Pushing a `vX.Y.Z` tag runs `.github/workflows/docker.yml`: it runs the install script checks, smoke tests the image, runs the install script end to end, then publishes the immutable `X.Y.Z` tag to `ghcr.io/mrtheroi/memry-server`, attests the image digest, and attests the installer files (`install.sh`, `docker-compose.yml`, `docker/community.env.example`). The attestations are GitHub build provenance (SLSA, Sigstore keyless); they appear under the repository's Attestations tab and need no GitHub release. There are no floating `X.Y` tags. Every tag gets its own run; runs for different tags are neither queued behind each other nor cancelled.
 
 `latest` is moved by the last step of the run, after `X.Y.Z` is pushed. That step lists the repository's tags again and points `latest` at `X.Y.Z` only if it is the highest stable `vX.Y.Z` tag at that moment, so an older or backport tag normally does not take it over. If the smoke test or the push fails, `latest` stays where it was.
 

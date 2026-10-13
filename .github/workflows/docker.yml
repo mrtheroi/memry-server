@@ -60,6 +60,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write # keyless signing of the attestation
+      attestations: write # store the build provenance attestation
     steps:
       - uses: actions/checkout@v4
 
@@ -124,16 +126,33 @@ jobs:
       # build above via the gha cache; arm64 is built under QEMU.
       - name: Build and push multi-arch image
         if: env.PUBLISH == 'true'
+        id: push
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          # SBOM and max-detail provenance attestations are stored in the
+          # image index.
+          sbom: true
+          provenance: mode=max
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Attested by digest, never by tag, so the attestation cannot be moved
+      # to another image. The identity is this workflow run (GitHub OIDC).
+      # It is kept in GitHub's attestations API, not in the registry, so GHCR
+      # needs no referrers support.
+      - name: Attest the image
+        if: env.PUBLISH == 'true'
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: false
 
       # Checked against the remote tags right before moving latest (not at the
       # start of the run), so an older or backport tag never takes it over.
@@ -153,3 +172,27 @@ jobs:
             exit 0
           fi
           docker buildx imagetools create --tag "${IMAGE}:latest" "${IMAGE}:${VERSION}"
+
+  # GitHub build provenance attestations for the installer and every file it
+  # downloads. Verification is documented in docs/self-hosting.md
+  # ("Verifying releases").
+  attest-installer:
+    name: Attest installer files
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build-and-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write # keyless signing of the attestation
+      attestations: write # store the build provenance attestation
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Attest installer files
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            install.sh
+            docker-compose.yml
+            docker/community.env.example
