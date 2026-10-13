@@ -243,47 +243,35 @@ The install script has two more tests, both run by the same workflow:
 
 ## Verifying releases
 
-The image and the installer files (`install.sh`, `docker-compose.yml` and `docker/community.env.example`) carry [GitHub artifact attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds): SLSA build provenance, signed keyless with Sigstore and recorded in the public transparency log. They are made by the `docker.yml` run of the release tag, not by a key. Verifying needs the [GitHub CLI](https://cli.github.com/) (`gh`) 2.51 or later.
+The image and the installer files (`install.sh`, `docker-compose.yml` and `docker/community.env.example`) carry [GitHub artifact attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds): SLSA build provenance, signed keyless with Sigstore and recorded in the public transparency log. They are made by the `docker.yml` run of the release tag, not by a key.
 
-Every command pins the exact tag you are installing (`--source-ref`) and the workflow that built it (`--signer-workflow`), so an older release or another workflow cannot be passed off as the requested one. Set the version once:
+Verifying needs the [GitHub CLI](https://cli.github.com/) (`gh`) **2.102.0 or later**, logged in to any GitHub account (`gh auth login`, or `GH_TOKEN` in CI). Older versions either lack `--source-ref` or match `--signer-workflow` as a prefix ([GHSA-wjmr-j3rp-mh2g](https://github.com/cli/cli/security/advisories/GHSA-wjmr-j3rp-mh2g)).
+
+Every check pins the exact tag you are installing (`--source-ref`) and the workflow that built it (`--signer-workflow`), so an older release or another workflow cannot be passed off as the requested one. The install then uses exactly what was verified: the downloaded files (`MEMRY_SOURCE_DIR`) and the image by digest (`MEMRY_IMAGE=...@sha256:...`), never the tag again, so a tag moved after the check cannot change what runs. Each step runs only if the previous one succeeded:
 
 ```sh
 VERSION=0.19.0
-```
+verify() {
+  gh attestation verify "$1" \
+    --repo mrtheroi/memry-server \
+    --source-ref "refs/tags/v${VERSION}" \
+    --signer-workflow mrtheroi/memry-server/.github/workflows/docker.yml
+}
 
-The image, verified by digest. `docker buildx imagetools inspect ghcr.io/mrtheroi/memry-server:${VERSION}` prints the digest (`Digest: sha256:...`):
-
-```sh
-gh attestation verify "oci://ghcr.io/mrtheroi/memry-server@<digest>" \
-  --repo mrtheroi/memry-server \
-  --source-ref "refs/tags/v${VERSION}" \
-  --signer-workflow mrtheroi/memry-server/.github/workflows/docker.yml
-```
-
-The installer files. Each step runs only if the previous one succeeded, so a failed check stops the chain:
-
-```sh
 mkdir -p memry-verify/docker && cd memry-verify &&
 base="https://raw.githubusercontent.com/mrtheroi/memry-server/v${VERSION}" &&
 curl -fsSL -o install.sh "$base/install.sh" &&
 curl -fsSL -o docker-compose.yml "$base/docker-compose.yml" &&
 curl -fsSL -o docker/community.env.example "$base/docker/community.env.example" &&
-gh attestation verify install.sh \
-  --repo mrtheroi/memry-server \
-  --source-ref "refs/tags/v${VERSION}" \
-  --signer-workflow mrtheroi/memry-server/.github/workflows/docker.yml &&
-gh attestation verify docker-compose.yml \
-  --repo mrtheroi/memry-server \
-  --source-ref "refs/tags/v${VERSION}" \
-  --signer-workflow mrtheroi/memry-server/.github/workflows/docker.yml &&
-gh attestation verify docker/community.env.example \
-  --repo mrtheroi/memry-server \
-  --source-ref "refs/tags/v${VERSION}" \
-  --signer-workflow mrtheroi/memry-server/.github/workflows/docker.yml &&
-echo "memry ${VERSION}: installer files verified"
+verify install.sh && verify docker-compose.yml && verify docker/community.env.example &&
+DIGEST="$(docker buildx imagetools inspect "ghcr.io/mrtheroi/memry-server:${VERSION}" | awk '/^Digest:/ {print $2}')" &&
+[ -n "$DIGEST" ] &&
+verify "oci://ghcr.io/mrtheroi/memry-server@${DIGEST}" &&
+echo "memry ${VERSION}: verified (image ${DIGEST})" &&
+MEMRY_SOURCE_DIR="$PWD" MEMRY_IMAGE="ghcr.io/mrtheroi/memry-server@${DIGEST}" sh ./install.sh
 ```
 
-Only trust the files if the last line prints.
+On a first install the installer writes that digest to `.env` (an existing `.env` keeps its `MEMRY_IMAGE`). For a verified upgrade, run the same `verify` checks for the new version and set `MEMRY_IMAGE=ghcr.io/mrtheroi/memry-server@<verified digest>` in `.env` instead of the tag.
 
 ## Releasing (maintainers)
 
