@@ -136,6 +136,8 @@ Every command except `key` and the raw `php`, `sh`, `bash` and `frankenphp` comm
 
 Set `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD` (and `DB_SSLMODE`, for example `require`) in `.env`, then remove the `postgres` service and the `depends_on` block from your copy of `docker-compose.yml`. The database must exist; migrations create the tables.
 
+Migrations need a direct PostgreSQL connection or a session-pooled one. Transaction or statement pooling (for example PgBouncer in transaction mode, or the Supabase/Neon pooler URLs) is not supported: `memory:migrate` relies on a session advisory lock, which such poolers cannot keep on one backend session, and it fails with an error when it detects that. Use the provider's direct connection string for `DB_HOST`.
+
 ## Migrations
 
 Run migrations after the first install and after every upgrade:

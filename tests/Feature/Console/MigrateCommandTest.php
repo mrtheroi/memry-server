@@ -91,3 +91,25 @@ it('releases the lock when a migration fails', function () {
 
     expect(lockIsFree())->toBeTrue();
 });
+
+it('fails when the database session changes during the run', function () {
+    writeMigration($this->migrationsPath, "Schema::create('memory_migrate_probe', fn (\$t) => \$t->id());");
+
+    Event::listen(MigrationsStarted::class, fn () => DB::reconnect());
+
+    $exitCode = Artisan::call('memory:migrate');
+
+    expect($exitCode)->not->toBe(0);
+    expect(Artisan::output())->toContain('transaction and statement pooling are not supported');
+});
+
+it('fails when the advisory lock was not held by the session at unlock time', function () {
+    writeMigration($this->migrationsPath, "Schema::create('memory_migrate_probe', fn (\$t) => \$t->id());");
+
+    Event::listen(MigrationsStarted::class, fn () => DB::select('select pg_advisory_unlock(?)', [MigrateMemory::LOCK_KEY]));
+
+    $exitCode = Artisan::call('memory:migrate');
+
+    expect($exitCode)->not->toBe(0);
+    expect(Artisan::output())->toContain('was not held by this session');
+});
