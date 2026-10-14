@@ -20,7 +20,7 @@ set -eu
 
 # The release this script installs: the raw GitHub files of tag v${MEMRY_VERSION}
 # and the image ghcr.io/mrtheroi/memry-server:${MEMRY_VERSION}.
-MEMRY_VERSION="${MEMRY_VERSION:-0.18.1}"
+MEMRY_VERSION="${MEMRY_VERSION:-0.19.0}"
 MIN_CLI_VERSION="0.7.0"
 DEFAULT_IMAGE="ghcr.io/mrtheroi/memry-server:${MEMRY_VERSION}"
 RAW_BASE="https://raw.githubusercontent.com/mrtheroi/memry-server/v${MEMRY_VERSION}"
@@ -556,7 +556,7 @@ SUMMARY
 }
 
 # is_memry_image <image reference>: the repository is memry-server, whatever
-# the registry, tag or digest (ghcr.io/mrtheroi/memry-server:0.18.1,
+# the registry, tag or digest (ghcr.io/mrtheroi/memry-server:0.19.0,
 # memry-server:local, memry-server:pinned-..., ...@sha256:...).
 is_memry_image() {
     name="${1##*/}"

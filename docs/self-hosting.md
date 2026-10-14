@@ -16,10 +16,10 @@ The server sends no telemetry. It only talks to your database and, if you config
 With Docker and Compose v2 installed ([get Docker](https://docs.docker.com/get-docker/)), one script starts memry Community and connects your agents:
 
 ```bash
-f=$(mktemp) && curl -fsSLo "$f" https://raw.githubusercontent.com/mrtheroi/memry-server/v0.18.1/install.sh && sh "$f" --email YOUR_EMAIL
+f=$(mktemp) && curl -fsSLo "$f" https://raw.githubusercontent.com/mrtheroi/memry-server/v0.19.0/install.sh && sh "$f" --email YOUR_EMAIL
 ```
 
-Replace `YOUR_EMAIL` with your email. The command downloads the script to a new temporary file (never overwriting a file in the current directory) and runs it only if the download succeeded. Read it before running it: `curl -fsSL https://raw.githubusercontent.com/mrtheroi/memry-server/v0.18.1/install.sh | less`. It is pinned to its release and:
+Replace `YOUR_EMAIL` with your email. The command downloads the script to a new temporary file (never overwriting a file in the current directory) and runs it only if the download succeeded. Read it before running it: `curl -fsSL https://raw.githubusercontent.com/mrtheroi/memry-server/v0.19.0/install.sh | less`. It is pinned to its release and:
 
 1. checks for Docker, Compose v2, curl and a running Docker daemon (it does not install Docker);
 2. downloads that release's `docker-compose.yml` and example `.env` into `~/memry-community`;
@@ -52,7 +52,7 @@ The installer also has a read-only diagnostic, `--doctor`. It pulls, starts, wri
 To check one install directory, which is the case when `.env` was lost:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mrtheroi/memry-server/v0.18.1/install.sh | sh -s -- --doctor --dir <directory>
+curl -fsSL https://raw.githubusercontent.com/mrtheroi/memry-server/v0.19.0/install.sh | sh -s -- --doctor --dir <directory>
 ```
 
 It finds the database volumes of that install with the installer's own rules (the project name Compose itself resolves from its `.env`, falling back to the `COMPOSE_PROJECT_NAME` in it and saying so when Compose cannot confirm it; without a `.env`, the project name with the directory checksum and the plain directory-name project), then reports whether `.env`, the volume and containers exist:
@@ -65,7 +65,7 @@ It finds the database volumes of that install with the installer's own rules (th
 Without `--dir` the doctor only lists, for information:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mrtheroi/memry-server/v0.18.1/install.sh | sh -s -- --doctor
+curl -fsSL https://raw.githubusercontent.com/mrtheroi/memry-server/v0.19.0/install.sh | sh -s -- --doctor
 ```
 
 For each volume labelled by Compose as `postgres-data`, or named `*_postgres-data`, it prints the Compose project, the creation date, the containers of that project with their working directory, and a status:
