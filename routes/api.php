@@ -11,6 +11,7 @@ use App\Http\Controllers\Auth\TokenController;
 use App\Http\Controllers\ContextController;
 use App\Http\Controllers\Dashboard\ListMemoriesController;
 use App\Http\Controllers\Dashboard\ListProjectsController;
+use App\Http\Controllers\Dashboard\ShowMemoryController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/context', ContextController::class)->middleware(['auth:sanctum', 'throttle:mcp']);
@@ -29,3 +30,4 @@ Route::delete('/account', DeleteAccountController::class)->middleware(['auth:san
 
 Route::get('/projects', ListProjectsController::class)->middleware(['auth:sanctum', 'throttle:dashboard']);
 Route::get('/memories', ListMemoriesController::class)->middleware(['auth:sanctum', 'throttle:dashboard']);
+Route::get('/memories/{id}', ShowMemoryController::class)->whereNumber('id')->middleware(['auth:sanctum', 'throttle:dashboard']);
