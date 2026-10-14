@@ -1217,23 +1217,26 @@ test_doctor_dir_canonicalizes_a_relative_path_to_a_missing_directory_like_the_in
     [ ! -e "${T}/memry" ] || fail "the doctor created the directory"
 }
 
-test_doctor_dir_resolves_a_dotdot_in_a_missing_path_whose_parent_is_missing_too() {
-    here="$(cd "$T" && pwd)"
-    project="memry-$(printf '%s' "${here}/memry" | cksum | cut -d ' ' -f 1)"
-    STUB_VOLUMES="${project}_postgres-data"
+test_doctor_dir_refuses_a_dot_segment_in_a_missing_path_before_any_docker_call() {
     run_install --doctor --dir "${T}/gone/../memry"
-    assert_status 0
-    assert_output_contains "Install directory: ${here}/memry"
-    assert_output_contains "volume: ${project}_postgres-data"
+    assert_status 2
+    assert_output_contains "Pass the install directory as the installer printed it: an absolute path without . or .. segments."
+    assert_log_not_contains "docker volume"
+    assert_log_not_contains "docker ps"
 }
 
-test_doctor_dir_removes_dot_segments_and_resolves_pairs_in_an_all_missing_path() {
-    here="$(cd "$T" && pwd)"
-    project="memry-$(printf '%s' "${here}/a/memry" | cksum | cut -d ' ' -f 1)"
+test_doctor_dir_refuses_a_missing_path_made_only_of_dot_segments() {
+    run_install --doctor --dir /missing/..
+    assert_status 2
+    assert_output_contains "without . or .. segments."
+}
+
+test_doctor_dir_accepts_a_missing_absolute_path_without_dot_segments_whose_parent_is_missing() {
+    project="memry-$(printf '%s' "${T}/a/b/memry" | cksum | cut -d ' ' -f 1)"
     STUB_VOLUMES="${project}_postgres-data"
-    run_install --doctor --dir "${T}/a/./b/../memry"
+    run_install --doctor --dir "${T}/a/b/memry"
     assert_status 0
-    assert_output_contains "Install directory: ${here}/a/memry"
+    assert_output_contains "Install directory: ${T}/a/b/memry"
     assert_output_contains "volume: ${project}_postgres-data"
 }
 

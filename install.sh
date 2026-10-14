@@ -172,9 +172,8 @@ canonical_dir() {
 
 # canonical_dir_or_missing <path>: the same absolute path for a directory that
 # may not exist, without creating it. A missing directory is its canonical
-# parent plus its name; with no parent either, the path made absolute and
-# normalized lexically ("." removed, "segment/.." resolved, never above "/"),
-# with its longest existing ancestor canonicalized like the installer does.
+# parent plus its name; with no parent either, the path made absolute. Dot
+# segments in a missing path are refused by the caller, never folded.
 canonical_dir_or_missing() {
     if [ -d "$1" ]; then canonical_dir "$1"; return; fi
     trimmed="${1%/}"
@@ -184,25 +183,7 @@ canonical_dir_or_missing() {
         case "$parent" in /) printf '/%s' "$(basename "$trimmed")" ;; *) printf '%s/%s' "$parent" "$(basename "$trimmed")" ;; esac
         return
     fi
-    case "$trimmed" in /*) absolute="$trimmed" ;; *) absolute="$(pwd)/${trimmed}" ;; esac
-    prefix="$(printf '%s' "$absolute" | awk -F/ '{
-        n = 0
-        for (i = 1; i <= NF; i++) {
-            if ($i == "" || $i == ".") continue
-            if ($i == "..") { if (n > 0) n--; continue }
-            seg[++n] = $i
-        }
-        out = ""
-        for (i = 1; i <= n; i++) out = out "/" seg[i]
-        printf "%s", (out == "" ? "/" : out)
-    }')"
-    rest=""
-    while [ ! -d "$prefix" ] && [ "$prefix" != / ]; do
-        rest="/$(basename "$prefix")${rest}"
-        prefix="$(dirname "$prefix")"
-    done
-    prefix="$(canonical_dir "$prefix")"
-    case "$prefix" in /) printf '%s' "$rest" ;; *) printf '%s%s' "$prefix" "$rest" ;; esac
+    case "$trimmed" in /*) printf '%s' "$trimmed" ;; *) printf '%s/%s' "$(pwd)" "${trimmed#./}" ;; esac
 }
 
 download_files() {
@@ -629,7 +610,14 @@ doctor() {
 # volume found here is that install's, never another stack's.
 doctor_dir() {
     expand_tilde
-    # Nothing is created here: a missing directory is only reported.
+    # Nothing is created here: a missing directory is only reported. Its dot
+    # segments cannot be folded safely (a symlink changes where ".." leads), so
+    # they are refused before anything else runs.
+    if [ ! -d "$DIR" ]; then
+        case "/${DIR#./}/" in
+            */./* | */../*) usage_error "Pass the install directory as the installer printed it: an absolute path without . or .. segments." ;;
+        esac
+    fi
     DIR="$(canonical_dir_or_missing "$DIR")"
     QDIR="$(shell_quote "$DIR")"
     all_volumes="$(docker volume ls --format '{{.Name}}')" \
