@@ -70,6 +70,62 @@ The email is trimmed and lowercased. The code has 6 digits, expires in 5 minutes
 
 Tokens expire after 30 days without use (`MEMRY_TOKEN_IDLE_DAYS`); an expired token answers `401 {"message": "Unauthenticated."}`, like any invalid token. `php artisan memory:prune-tokens` (scheduled daily) removes them.
 
+## Dashboard (session) authentication
+
+The private dashboard (a single-page app on its own subdomain, for example `https://app.memry.com.mx` talking to `https://api.memry.com.mx`) signs in with the same emailed code as the CLI, but gets a session cookie instead of a token. Only requests whose `Origin` or `Referer` is a stateful domain (`SANCTUM_STATEFUL_DOMAINS`) use the session; CLI and MCP requests carry a bearer token, send no such header and behave exactly as before.
+
+Server settings (see [Security](security.md#dashboard-sessions-cors-and-cookies)):
+
+| Variable | Example | Meaning |
+| --- | --- | --- |
+| `MEMRY_DASHBOARD_URL` | `https://app.memry.com.mx` | Browser origin(s) allowed by CORS, comma-separated. Empty (the default) allows none |
+| `SANCTUM_STATEFUL_DOMAINS` | `app.memry.com.mx` | Hosts whose requests use the session (include the port in development, for example `localhost:5173`) |
+| `SESSION_DOMAIN` | `.memry.com.mx` | Lets the session and `XSRF-TOKEN` cookies be shared between the app and API subdomains |
+| `SESSION_SECURE_COOKIE` | `true` | Send cookies over HTTPS only; set it in production |
+
+The flow, from the SPA (every request with credentials: `fetch(..., {credentials: "include"})` or `withCredentials: true`):
+
+```bash
+# 1. Get the CSRF cookie. 204, sets XSRF-TOKEN and the session cookie.
+curl -s -c jar -H "Origin: https://app.memry.com.mx" https://<api-host>/sanctum/csrf-cookie
+
+# 2. Request the code (same endpoint as the CLI): 202
+# 3. Open the session. Echo the XSRF-TOKEN cookie in the X-XSRF-TOKEN header (axios and most clients do it automatically).
+curl -s -b jar -c jar -X POST https://<api-host>/api/session \
+  -H "Origin: https://app.memry.com.mx" -H "X-XSRF-TOKEN: <XSRF-TOKEN cookie value>" \
+  -H "Content-Type: application/json" -d '{"email":"ada@example.com","code":"042917"}'
+# 204, no body, no token; the session cookie is replaced (the session id is regenerated)
+
+# 4. Use the API with the cookie
+curl -s -b jar -H "Origin: https://app.memry.com.mx" https://<api-host>/api/me
+# 200 {"data":{"id":1,"email":"ada@example.com","name":"ada","team":{"id":1,"slug":"...","personal_team":true}}}
+
+# 5. Sign out
+curl -s -b jar -c jar -X DELETE https://<api-host>/api/session \
+  -H "Origin: https://app.memry.com.mx" -H "X-XSRF-TOKEN: <XSRF-TOKEN cookie value>"
+# 204
+```
+
+Every state-changing request (`POST`, `DELETE`) needs the `X-XSRF-TOKEN` header; without it the server answers `419`.
+
+| Endpoint | Status | When |
+| --- | --- | --- |
+| `GET /sanctum/csrf-cookie` | `204` | Sets the `XSRF-TOKEN` cookie |
+| `POST /api/session` | `204` | The code is valid: the user is signed in (created on first login, with its personal team). No token is issued |
+| | `422` | Validation errors, or `Invalid or expired code.` (same rules and message as `POST /api/auth/token`) |
+| | `419` | Missing or wrong CSRF token |
+| | `429` | Rate limit exceeded for the IP (shared with `POST /api/auth/token`) |
+| `DELETE /api/session` | `204` | The session is ended and the CSRF token regenerated |
+| | `401` | Not signed in |
+| | `422` | The request used a bearer token: this endpoint never revokes tokens, use `DELETE /api/auth/token` |
+| `GET /api/me` | `200` | `{"data": {"id", "email", "name", "team": {"id", "slug", "personal_team"}}}`. The team is the one the request acts on: the token's team with a bearer token, the personal team with a session. Works with both |
+| | `401` | Not signed in and no valid token |
+
+Token endpoints under a session:
+
+- `GET /api/auth/tokens` lists the user's tokens; `current` is `false` for all of them, because a session is not a token.
+- `DELETE /api/auth/tokens/{id}` revokes that token, as with a bearer token.
+- `DELETE /api/auth/token` answers `422` (`This request is authenticated with a session, not a token. Use DELETE /api/session to sign out.`).
 ## Account deletion
 
 `DELETE /api/account` deletes the authenticated user and all of their data: memories, prompts, every token (not only the one used for the request) and pending login codes. The body must repeat the account email, so a stray call cannot delete the account. The email is trimmed and lowercased, as in the login endpoints. It shares the rate limit of `/mcp/memory` and `/api/context`.
