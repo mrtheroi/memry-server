@@ -5,6 +5,9 @@ use App\Memory\Infrastructure\Persistence\EloquentMemoryRepository;
 use App\Models\User;
 use App\Team\Domain\AccessContext;
 use App\Team\Domain\AccessContextResolver;
+use App\Team\Domain\ProjectAccess;
+use App\Team\Domain\ProjectAccessPolicy;
+use App\Team\Domain\Role;
 use App\Team\Infrastructure\Persistence\TeamRecord;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Mcp\Server\Testing\TestResponse;
@@ -145,4 +148,59 @@ function allowRowsWithoutTeam(): void
     foreach (['set_observations_team_id_not_null', 'set_user_prompts_team_id_not_null'] as $name) {
         (require collect(glob(database_path("migrations/*_{$name}.php")))->sole())->down();
     }
+}
+
+/*
+ * Dashboard read helpers.
+ */
+function bearerOf(User $user): array
+{
+    return ['Authorization' => 'Bearer '.$user->createTeamToken('cli', contextFor($user)->teamId)->plainTextToken];
+}
+
+/*
+ * The app instance is reused across requests inside one test, so the guard would keep the first caller.
+ */
+function readAs(array $headers, string $uri): Illuminate\Testing\TestResponse
+{
+    app('auth')->forgetGuards();
+
+    return test()->withHeaders($headers)->getJson($uri);
+}
+
+/*
+ * The shipped policy grants members no project yet; pin one to exercise the filter. Null grants every project.
+ *
+ * @param  list<int>|null  $projectIds
+ */
+function pinMemberAccess(?array $projectIds = null): void
+{
+    app()->bind(ProjectAccessPolicy::class, fn () => new class($projectIds) implements ProjectAccessPolicy
+    {
+        public function __construct(private ?array $projectIds) {}
+
+        public function for(Role $role, int $teamId, int $userId): ProjectAccess
+        {
+            return $role === Role::Member && $this->projectIds !== null ? ProjectAccess::only(...$this->projectIds) : ProjectAccess::all();
+        }
+    });
+}
+
+/*
+ * A dashboard session for the user: a stateful origin plus the web guard, as the SPA cookie resolves to.
+ */
+function sessionOf(User $user): TestCase
+{
+    config(['sanctum.stateful' => ['app.memry.test']]);
+    app('auth')->forgetGuards();
+
+    return test()->actingAs($user, 'web')->withHeaders(['Origin' => 'https://app.memry.test', 'Referer' => 'https://app.memry.test/']);
+}
+
+function personalMemory(User $author, string $title, string $project = 'dbmcp'): Observation
+{
+    return (new EloquentMemoryRepository)->save(new Observation(
+        userId: $author->id, sessionId: 's', type: 'decision', title: $title, content: 'private notes',
+        project: $project, scope: 'personal', topicKey: null, teamId: contextFor($author)->teamId,
+    ));
 }

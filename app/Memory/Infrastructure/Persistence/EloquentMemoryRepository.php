@@ -2,8 +2,11 @@
 
 namespace App\Memory\Infrastructure\Persistence;
 
+use App\Memory\Domain\InvalidCursor;
+use App\Memory\Domain\MemoryPage;
 use App\Memory\Domain\MemoryRepository;
 use App\Memory\Domain\Observation;
+use App\Memory\Domain\ProjectName;
 use App\Memory\Domain\ProjectRepository;
 use App\Team\Domain\AccessContext;
 use App\Team\Domain\AccessDenied;
@@ -71,14 +74,73 @@ final class EloquentMemoryRepository implements MemoryRepository
         return $record ? $this->toDomain($record) : null;
     }
 
+    public function pageVisible(AccessContext $context, ?string $project, ?string $type, ?string $cursor, int $perPage): MemoryPage
+    {
+        $cursor = $cursor === null ? null : ($this->unsignedCursor($cursor) ?? throw InvalidCursor::make());
+
+        if ($context->isDenied()) {
+            return new MemoryPage([], null, null, $perPage);
+        }
+
+        $page = $this->scopeToReadable(ObservationRecord::query(), $context)
+            ->tap(fn (Builder $builder) => $this->inProject($builder, $project))
+            ->when($type !== null, fn (Builder $builder) => $builder->where('type', $type))
+            ->orderByDesc('updated_at')
+            ->orderByDesc('id')
+            ->cursorPaginate($perPage, ['*'], 'cursor', $cursor);
+
+        return new MemoryPage(
+            $page->getCollection()->map(fn (ObservationRecord $record) => $this->toDomain($record))->all(),
+            $this->signCursor($page->nextCursor()?->encode()),
+            $this->signCursor($page->previousCursor()?->encode()),
+            $perPage,
+        );
+    }
+
+    public function findVisible(AccessContext $context, int $id): ?Observation
+    {
+        if ($context->isDenied()) {
+            return null;
+        }
+
+        $record = $this->scopeToReadable(ObservationRecord::where('id', $id), $context)->first();
+
+        return $record ? $this->toDomain($record) : null;
+    }
+
+    public function searchVisible(AccessContext $context, string $query, int $limit, ?string $project = null): array
+    {
+        return $this->ranked($context, $query, $limit, $project, fn (Builder $builder) => $this->scopeToReadable($builder, $context));
+    }
+
     public function search(AccessContext $context, string $query, int $limit, ?string $project = null): array
+    {
+        return $this->ranked($context, $query, $limit, $project, fn (Builder $builder) => $this->scopeTo($builder, $context));
+    }
+
+    /**
+     * @param  callable(Builder): Builder  $scope
+     * @return list<Observation>
+     */
+    /**
+     * The one project filter of the read paths: any spelling is normalized like the stored
+     * names, so no entry point (HTTP or MCP) can forget it; null means every project.
+     */
+    private function inProject(Builder $builder, ?string $project): Builder
+    {
+        $name = $project === null ? null : ProjectName::normalize($project);
+
+        return $name === null ? $builder : $builder->where('project', $name);
+    }
+
+    private function ranked(AccessContext $context, string $query, int $limit, ?string $project, callable $scope): array
     {
         if ($context->isDenied()) {
             return [];
         }
 
-        return $this->scopeTo(ObservationRecord::query(), $context)
-            ->when($project, fn ($builder) => $builder->where('project', $project))
+        return $scope(ObservationRecord::query())
+            ->tap(fn (Builder $builder) => $this->inProject($builder, $project))
             ->whereRaw("search_vector @@ websearch_to_tsquery('english', ?)", [$query])
             ->orderByRaw("ts_rank(search_vector, websearch_to_tsquery('english', ?)) DESC", [$query])
             ->limit($limit)
@@ -165,6 +227,47 @@ final class EloquentMemoryRepository implements MemoryRepository
             ->when(! $context->projects->isAll(), fn (Builder $scope) => $scope->whereIn('project_id', $context->projects->ids()));
     }
 
+    /**
+     * scopeTo() for the dashboard: personal-scope memories are visible only to their author.
+     */
+    private function scopeToReadable(Builder $builder, AccessContext $context): Builder
+    {
+        return $this->scopeTo($builder, $context)
+            ->when(! $context->isSystem(), fn (Builder $scope) => $scope->where(fn (Builder $visible) => $visible
+                ->where('scope', '<>', 'personal')
+                ->orWhere('user_id', $context->userId)));
+    }
+
+    /**
+     * A cursor is only trusted if it decodes to the keys this list orders by; anything else would reach the query.
+     */
+    /**
+     * Cursors are signed with the app key, so only a cursor this server issued is accepted: a
+     * forged or edited one (any field, any date the database cannot parse) never reaches a query.
+     */
+    private function signCursor(?string $encoded): ?string
+    {
+        return $encoded === null ? null : $encoded.'.'.$this->cursorMac($encoded);
+    }
+
+    private function unsignedCursor(string $signed): ?string
+    {
+        $dot = strrpos($signed, '.');
+
+        if ($dot === false) {
+            return null;
+        }
+
+        $encoded = substr($signed, 0, $dot);
+
+        return hash_equals($this->cursorMac($encoded), substr($signed, $dot + 1)) ? $encoded : null;
+    }
+
+    private function cursorMac(string $encoded): string
+    {
+        return hash_hmac('sha256', 'memry-cursor|'.$encoded, (string) config('app.key'));
+    }
+
     private function withinTeam(Builder $builder, int $teamId): Builder
     {
         return $builder->where('team_id', $teamId);
@@ -184,6 +287,7 @@ final class EloquentMemoryRepository implements MemoryRepository
             id: $record->id,
             updatedAt: $record->updated_at?->toDateTimeImmutable(),
             teamId: $record->team_id,
+            createdAt: $record->created_at?->toDateTimeImmutable(),
         );
     }
 }

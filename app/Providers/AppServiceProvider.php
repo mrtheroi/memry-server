@@ -3,10 +3,12 @@
 namespace App\Providers;
 
 use App\Memory\Domain\MemoryRepository;
+use App\Memory\Domain\ProjectCatalog;
 use App\Memory\Domain\ProjectRepository;
 use App\Memory\Domain\PromptRepository;
 use App\Memory\Infrastructure\Persistence\EloquentMemoryRepository;
 use App\Memory\Infrastructure\Persistence\EloquentPromptRepository;
+use App\Memory\Infrastructure\Persistence\QueryProjectCatalog;
 use App\Memory\Infrastructure\Persistence\QueryProjectRepository;
 use App\Models\PersonalAccessToken;
 use App\Team\Domain\AccessContext;
@@ -33,6 +35,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(MemoryRepository::class, EloquentMemoryRepository::class);
         $this->app->bind(PromptRepository::class, EloquentPromptRepository::class);
         $this->app->bind(ProjectRepository::class, QueryProjectRepository::class);
+        $this->app->bind(ProjectCatalog::class, QueryProjectCatalog::class);
         $this->app->bind(TeamSlugs::class, RandomTeamSlugs::class);
         $this->app->bind(AccessContextResolver::class, EloquentAccessContextResolver::class);
         $this->app->bind(ProjectAccessPolicy::class, RoleProjectAccessPolicy::class);
@@ -50,6 +53,7 @@ class AppServiceProvider extends ServiceProvider
         Sanctum::authenticateAccessTokensUsing(fn (PersonalAccessToken $token, bool $isValid) => $isValid && ! $token->isIdle());
 
         RateLimiter::for('mcp', fn (Request $request) => Limit::perMinute(60)->by($request->user()->id));
+        RateLimiter::for('dashboard', fn (Request $request) => Limit::perMinute(120)->by($request->user()->id));
         RateLimiter::for('auth-tokens', fn (Request $request) => Limit::perMinute(10)->by($request->user()->id));
         RateLimiter::for('auth-code', function (Request $request) {
             $email = $request->input('email');

@@ -20,6 +20,7 @@ final readonly class Observation
         public ?int $id = null,
         public ?DateTimeImmutable $updatedAt = null,
         public ?int $teamId = null,
+        public ?DateTimeImmutable $createdAt = null,
     ) {
         $this->project = ProjectName::normalize($project);
     }
