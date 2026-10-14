@@ -7,6 +7,7 @@ use App\Models\LoginCode;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -33,6 +34,13 @@ class DeleteAccountController extends Controller
             DB::table('sessions')->where('user_id', $user->id)->delete();
             $user->delete();
         });
+
+        // A dashboard session outlives its user otherwise; end it like DELETE /api/session does.
+        if (! $user->authenticatedWithToken()) {
+            Auth::guard('web')->logout();
+            $request->session()->invalidate();
+            $request->session()->regenerateToken();
+        }
 
         return response()->noContent();
     }

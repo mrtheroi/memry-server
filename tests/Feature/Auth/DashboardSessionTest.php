@@ -268,3 +268,26 @@ test('a non-stateful POST /api/session is refused without burning the code or cr
     expect(User::where('email', 'new@example.com')->exists())->toBeFalse();
     $this->postJson('/api/auth/token', ['email' => 'new@example.com', 'code' => $code])->assertOk()->assertJsonStructure(['token']);
 });
+
+test('DELETE /api/account under a session deletes the account and ends that session', function () {
+    $response = dashboardLogin();
+    $cookie = sessionCookieFrom($response);
+    $user = User::where('email', 'ada@example.com')->firstOrFail();
+    $handler = app('session.store')->getHandler();
+    $sessionId = app('session.store')->getId();
+    expect($handler->read($sessionId))->not->toBe('');
+
+    asDashboard($cookie)->deleteJson('/api/account', ['email' => 'ada@example.com'])->assertNoContent();
+
+    $this->assertModelMissing($user);
+    expect($handler->read($sessionId))->toBe('');
+    asDashboard($cookie)->getJson('/api/me')->assertUnauthorized();
+});
+
+test('DELETE /api/account under a session with the wrong email deletes nothing and keeps the session', function () {
+    $cookie = sessionCookieFrom(dashboardLogin());
+
+    asDashboard($cookie)->deleteJson('/api/account', ['email' => 'other@example.com'])->assertUnprocessable();
+
+    asDashboard($cookie)->getJson('/api/me')->assertOk();
+});
