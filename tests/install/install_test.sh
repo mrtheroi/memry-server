@@ -136,6 +136,11 @@ case "$*" in
             # `docker ps` lists the project unless it also filters for the app.
             if [ "${5:-}" = label=com.docker.compose.service=app ]; then
                 case " ${STUB_APP_STOPPED_PROJECTS:-} " in *" ${project} "*) exit 0 ;; esac
+                # STUB_ONEOFF_PROJECTS: only a `compose run` app container runs,
+                # so the app filter lists it unless one-off containers are excluded.
+                if [ "${7:-}" = label=com.docker.compose.oneoff=False ]; then
+                    case " ${STUB_ONEOFF_PROJECTS:-} " in *" ${project} "*) exit 0 ;; esac
+                fi
             fi
         fi
         image="ghcr.io/mrtheroi/memry-server:0.18.1"
@@ -241,7 +246,7 @@ setup_test() {
         STUB_IMAGE_STATUS STUB_TOKEN STUB_UP_STATUS STUB_MEMRY_VERSION STUB_SETUP_STATUS \
         STUB_CURL_FAIL STUB_VOLUME_STATUS STUB_EXISTING_VOLUME STUB_CLOCK_STEP STUB_PUBLISHED_PORT \
         STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_NO_TOKEN STUB_CONTEXT_HOST STUB_REPO_DIGESTS STUB_IMAGE_ID STUB_TAG_STATUS \
-        STUB_VOLUMES STUB_CONTAINERS STUB_UNLABELED_VOLUMES STUB_STOPPED_PROJECTS STUB_APP_STOPPED_PROJECTS STUB_COMPOSE_PROJECT \
+        STUB_VOLUMES STUB_CONTAINERS STUB_UNLABELED_VOLUMES STUB_STOPPED_PROJECTS STUB_APP_STOPPED_PROJECTS STUB_ONEOFF_PROJECTS STUB_COMPOSE_PROJECT \
         STUB_CONTAINER_IMAGES STUB_VOLUME_LS_STATUS STUB_PS_STATUS STUB_CREATED_AT
     stub_docker
     stub_curl
@@ -256,7 +261,7 @@ run_install() {
     stub_value=""
     for stub_var in STUB_LOG STUB_SOURCE STUB_DAEMON_STATUS STUB_COMPOSE_VERSION STUB_COMPOSE_STATUS \
         STUB_PULL_STATUS STUB_IMAGE_STATUS STUB_TOKEN STUB_NO_TOKEN STUB_VOLUME_STATUS \
-        STUB_EXISTING_VOLUME STUB_PUBLISHED_PORT STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_CONTEXT_HOST STUB_REPO_DIGESTS STUB_IMAGE_ID STUB_TAG_STATUS STUB_VOLUMES STUB_CONTAINERS STUB_UNLABELED_VOLUMES STUB_STOPPED_PROJECTS STUB_APP_STOPPED_PROJECTS STUB_COMPOSE_PROJECT \
+        STUB_EXISTING_VOLUME STUB_PUBLISHED_PORT STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_CONTEXT_HOST STUB_REPO_DIGESTS STUB_IMAGE_ID STUB_TAG_STATUS STUB_VOLUMES STUB_CONTAINERS STUB_UNLABELED_VOLUMES STUB_STOPPED_PROJECTS STUB_APP_STOPPED_PROJECTS STUB_ONEOFF_PROJECTS STUB_COMPOSE_PROJECT \
         STUB_CONTAINER_IMAGES STUB_VOLUME_LS_STATUS STUB_PS_STATUS STUB_CREATED_AT; do
         eval "stub_value=\${$stub_var-}"
         printf "%s='%s'; export %s\n" "$stub_var" "$stub_value" "$stub_var"
@@ -288,6 +293,7 @@ run_install() {
         ${STUB_UNLABELED_VOLUMES:+STUB_UNLABELED_VOLUMES="$STUB_UNLABELED_VOLUMES"} \
         ${STUB_STOPPED_PROJECTS:+STUB_STOPPED_PROJECTS="$STUB_STOPPED_PROJECTS"} \
         ${STUB_APP_STOPPED_PROJECTS:+STUB_APP_STOPPED_PROJECTS="$STUB_APP_STOPPED_PROJECTS"} \
+        ${STUB_ONEOFF_PROJECTS:+STUB_ONEOFF_PROJECTS="$STUB_ONEOFF_PROJECTS"} \
         ${STUB_COMPOSE_PROJECT:+STUB_COMPOSE_PROJECT="$STUB_COMPOSE_PROJECT"} \
         ${STUB_CONTAINER_IMAGES:+STUB_CONTAINER_IMAGES="$STUB_CONTAINER_IMAGES"} \
         ${STUB_VOLUME_LS_STATUS:+STUB_VOLUME_LS_STATUS="$STUB_VOLUME_LS_STATUS"} \
@@ -1182,6 +1188,15 @@ test_doctor_dir_reports_stopped_when_its_containers_exist_but_none_is_running() 
 test_doctor_dir_reports_stopped_when_only_postgres_is_running() {
     make_install_dir myproj-1
     STUB_VOLUMES="myproj-1_postgres-data" STUB_CONTAINERS="myproj-1=${DIR}" STUB_APP_STOPPED_PROJECTS="myproj-1"
+    run_install --doctor --dir "$DIR"
+    assert_status 0
+    assert_output_contains "Stopped: the data is intact."
+    assert_output_not_contains "Healthy"
+}
+
+test_doctor_dir_reports_stopped_when_only_a_one_off_app_container_runs() {
+    make_install_dir myproj-1
+    STUB_VOLUMES="myproj-1_postgres-data" STUB_CONTAINERS="myproj-1=${DIR}" STUB_ONEOFF_PROJECTS="myproj-1"
     run_install --doctor --dir "$DIR"
     assert_status 0
     assert_output_contains "Stopped: the data is intact."
