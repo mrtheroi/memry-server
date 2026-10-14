@@ -134,3 +134,15 @@ function sharedTeamOf(User $user): int
 {
     return TeamRecord::factory()->create(['owner_id' => $user->id])->id;
 }
+
+/*
+ * observations.team_id and user_prompts.team_id are NOT NULL. Tests of the backfill and of the
+ * legacy-row contract need rows without a team, so they relax both columns for the test (the
+ * DDL rolls back with the test transaction).
+ */
+function allowRowsWithoutTeam(): void
+{
+    foreach (['set_observations_team_id_not_null', 'set_user_prompts_team_id_not_null'] as $name) {
+        (require collect(glob(database_path("migrations/*_{$name}.php")))->sole())->down();
+    }
+}

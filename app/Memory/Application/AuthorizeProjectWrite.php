@@ -7,8 +7,8 @@ use App\Team\Domain\AccessContext;
 use App\Team\Domain\AccessDenied;
 
 /**
- * Write gate shared by the save paths. A denied context is the legacy user without a team,
- * which still writes the legacy columns only; it never reaches a team's projects.
+ * Write gate shared by the save paths. Every row belongs to a team, so a denied context (no
+ * resolvable team) and the system context are refused; a team context needs access to the project.
  */
 final class AuthorizeProjectWrite
 {
@@ -20,7 +20,11 @@ final class AuthorizeProjectWrite
             throw AccessDenied::systemContext();
         }
 
-        if ($context->isDenied() || $context->projects->isAll()) {
+        if ($context->isDenied()) {
+            throw AccessDenied::noTeam();
+        }
+
+        if ($context->projects->isAll()) {
             return;
         }
 

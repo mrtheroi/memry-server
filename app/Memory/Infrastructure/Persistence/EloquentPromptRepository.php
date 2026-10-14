@@ -6,6 +6,7 @@ use App\Memory\Domain\ProjectRepository;
 use App\Memory\Domain\PromptRepository;
 use App\Memory\Domain\UserPrompt;
 use App\Team\Domain\AccessContext;
+use App\Team\Domain\AccessDenied;
 
 final class EloquentPromptRepository implements PromptRepository
 {
@@ -13,17 +14,17 @@ final class EloquentPromptRepository implements PromptRepository
 
     public function save(UserPrompt $prompt): void
     {
+        $teamId = $prompt->teamId ?? throw AccessDenied::noTeam();
+
         UserPromptRecord::create([
             'user_id' => $prompt->userId,
             'session_id' => $prompt->sessionId,
             'project' => $prompt->project,
             'content' => $prompt->content,
-            ...$prompt->teamId === null ? [] : [
-                'team_id' => $prompt->teamId,
-                'project_id' => $prompt->project === null
-                    ? null
-                    : $this->projects->getOrCreateId($prompt->teamId, $prompt->project),
-            ],
+            'team_id' => $teamId,
+            'project_id' => $prompt->project === null
+                ? null
+                : $this->projects->getOrCreateId($teamId, $prompt->project),
         ]);
     }
 

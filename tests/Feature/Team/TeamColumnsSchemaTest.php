@@ -30,30 +30,32 @@ function teamIndexMigration(string $name): object
     return require collect(glob(database_path("migrations/*_{$name}.php")))->sole();
 }
 
+function schemaTestTeamOf(int $userId): int
+{
+    return DB::table('teams')->where('owner_id', $userId)->where('personal_team', true)->value('id');
+}
+
 function observationRow(int $userId, array $extra = []): array
 {
     return $extra + [
-        'user_id' => $userId, 'session_id' => 's', 'type' => 'note',
+        'user_id' => $userId, 'session_id' => 's', 'type' => 'note', 'team_id' => schemaTestTeamOf($userId),
         'title' => 't', 'content' => 'c', 'created_at' => now(), 'updated_at' => now(),
     ];
 }
 
-test('the write path of a user without a team leaves the new team columns NULL', function () {
+test('a user without a team is refused on write; only a legacy token keeps team_id NULL', function () {
     $user = User::factory()->withoutPersonalTeam()->create();
 
     MemoryServer::actingAs($user)->tool(SaveMemory::class, [
         'session_id' => 's', 'type' => 'decision', 'title' => 'T', 'content' => 'C', 'project' => 'p',
-    ])->assertOk();
+    ])->assertHasErrors(['A team is required to write.']);
     MemoryServer::actingAs($user)->tool(SavePrompt::class, [
         'session_id' => 's', 'project' => 'p', 'content' => 'hello',
-    ])->assertOk();
+    ])->assertHasErrors(['A team is required to write.']);
     $token = $user->createToken('t')->accessToken;
 
-    $observation = DB::table('observations')->sole();
-    $prompt = DB::table('user_prompts')->sole();
-    expect([$observation->team_id, $observation->project_id, $observation->created_by, $observation->updated_by])
-        ->each->toBeNull()
-        ->and([$prompt->team_id, $prompt->project_id])->each->toBeNull()
+    expect(DB::table('observations')->count())->toBe(0)
+        ->and(DB::table('user_prompts')->count())->toBe(0)
         ->and(DB::table('personal_access_tokens')->where('id', $token->id)->value('team_id'))->toBeNull();
 });
 
@@ -71,8 +73,8 @@ test('deleting the creator keeps the observation with created_by NULL', function
 test('deleting a project keeps its observations and prompts with project_id NULL', function () {
     $user = User::factory()->create();
     $project = ProjectRecord::factory()->create();
-    DB::table('observations')->insert(observationRow($user->id, ['project_id' => $project->id]));
-    DB::table('user_prompts')->insert(['user_id' => $user->id, 'session_id' => 's', 'content' => 'c', 'project_id' => $project->id, 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('observations')->insert(observationRow($user->id, ['project_id' => $project->id, 'team_id' => $project->team_id]));
+    DB::table('user_prompts')->insert(promptRow($user->id, ['project_id' => $project->id, 'team_id' => $project->team_id]));
 
     $project->delete();
 
@@ -134,7 +136,7 @@ test('the team indexes exist and are valid', function () {
 
 function promptRow(int $userId, array $extra = []): array
 {
-    return $extra + ['user_id' => $userId, 'session_id' => 's', 'content' => 'c', 'created_at' => now(), 'updated_at' => now()];
+    return $extra + ['user_id' => $userId, 'session_id' => 's', 'content' => 'c', 'team_id' => schemaTestTeamOf($userId), 'created_at' => now(), 'updated_at' => now()];
 }
 
 test('an observation cannot pair a team with a project of another team', function () {
@@ -162,7 +164,7 @@ test('rows accept a project of their own team, or no project', function () {
     DB::table('observations')->insert(observationRow($user->id, ['team_id' => $project->team_id, 'project_id' => $project->id]));
     DB::table('observations')->insert(observationRow($user->id, ['team_id' => $project->team_id]));
     DB::table('user_prompts')->insert(promptRow($user->id, ['team_id' => $project->team_id, 'project_id' => $project->id]));
-    DB::table('user_prompts')->insert(promptRow($user->id, ['project_id' => $project->id]));
+    DB::table('user_prompts')->insert(promptRow($user->id, ['team_id' => $project->team_id]));
 
     expect(DB::table('observations')->count())->toBe(2)
         ->and(DB::table('user_prompts')->count())->toBe(2);

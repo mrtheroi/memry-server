@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **Requires the teams release (0.19.0) first, with `memory:backfill-teams --check` reporting 0.** The new migrations `set_observations_team_id_not_null` and `set_user_prompts_team_id_not_null` make `team_id` NOT NULL on memories and prompts. If any row still has no team they stop before changing anything with `Run memory:backfill-teams first: <table> has N rows without team_id`; run `memory:backfill-teams`, confirm `--check` is 0, then migrate again. See "Upgrades" in `docs/self-hosting.md`
+
+### Changed
+
+- **Every memory and prompt belongs to a team.** `observations.team_id` and `user_prompts.team_id` are NOT NULL, applied without blocking writes (a `CHECK ... NOT VALID`, then `VALIDATE`, then `SET NOT NULL`, and the temporary check is dropped; rolling back drops the NOT NULL only). A write from a context without a team (a user whose team cannot be resolved) is now refused with `A team is required to write.` instead of writing a row without a team, and the memory and prompt repositories throw the same error if handed no team; nothing is provisioned on write. `personal_access_tokens.team_id` stays nullable on purpose (a token whose user is gone, or a legacy token, resolves through the personal team). `memory:backfill-teams` and its `--check` remain
+
 ### Fixed
 
 - **`install.sh --doctor` edge cases.** When `docker compose config` fails and the `COMPOSE_PROJECT_NAME` in `.env` is an interpolation expression (for example `${PROJECT_NAME:-memry}`), the doctor now says the name cannot be resolved, makes no volume or container claim (`containers: not checked`) and prints no `docker volume rm`, instead of searching for a literal volume. A `--dir` path that does not exist and contains a `.`, `..` or empty (`//`) segment (after one leading `./` and one trailing `/`) is now refused with a usage error before any Docker call, even on a host without Docker ("Pass the install directory as the installer printed it: an absolute path without . or .. segments."), because a symlink changes where `..` leads and the doctor could otherwise look at, and offer to delete, another install's volume. Existing directories are canonicalized as before

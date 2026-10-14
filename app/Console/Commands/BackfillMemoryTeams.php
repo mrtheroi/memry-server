@@ -8,7 +8,7 @@ use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
 
 #[Signature('memory:backfill-teams {--chunk=500 : Rows per transaction} {--check : Report what is missing without changing anything}')]
-#[Description('Assign personal teams, projects and authorship to rows created before teams existed. Run once after dual-write (task 6) is deployed; re-running is safe; it only fills rows that still have no team.')]
+#[Description('Assign personal teams, projects and authorship to rows created before teams existed. Re-running is safe; it only fills rows that still have no team. With --check it must report 0 before the team_id NOT NULL migrations run.')]
 class BackfillMemoryTeams extends Command
 {
     public function handle(BackfillTeams $backfill): int

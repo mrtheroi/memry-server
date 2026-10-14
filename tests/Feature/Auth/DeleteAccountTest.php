@@ -23,7 +23,7 @@ test('it deletes the memories and prompts of the user', function () {
     $user = User::factory()->create(['email' => 'ada@example.com']);
     $token = $user->createToken('memry-cli')->plainTextToken;
     remember($user, 'Auth model', 'Sanctum bearer tokens');
-    (new EloquentPromptRepository)->save(new UserPrompt($user->id, 'session-1', 'dbmcp', 'Add login'));
+    (new EloquentPromptRepository)->save(new UserPrompt($user->id, 'session-1', 'dbmcp', 'Add login', teamId: contextFor($user)->teamId));
 
     $this->withToken($token)->deleteJson('/api/account', ['email' => 'ada@example.com'])
         ->assertNoContent();
@@ -85,7 +85,7 @@ test('it leaves the data of other users untouched', function () {
     $stranger = User::factory()->create(['email' => 'grace@example.com']);
     $strangerToken = $stranger->createToken('memry-cli')->plainTextToken;
     remember($stranger, 'Stranger decision', 'Must survive');
-    (new EloquentPromptRepository)->save(new UserPrompt($stranger->id, 'session-1', 'dbmcp', 'Stranger prompt'));
+    (new EloquentPromptRepository)->save(new UserPrompt($stranger->id, 'session-1', 'dbmcp', 'Stranger prompt', teamId: contextFor($stranger)->teamId));
     LoginCode::issue('grace@example.com');
 
     $this->withToken($token)->deleteJson('/api/account', ['email' => 'ada@example.com'])
@@ -185,7 +185,7 @@ test('it answers an empty 204 and wipes every row of a user with several tokens'
     $third = $user->createToken('mcp')->plainTextToken;
     remember($user, 'Auth model', 'Sanctum bearer tokens');
     remember($user, 'Search', 'Postgres FTS', project: 'memry');
-    (new EloquentPromptRepository)->save(new UserPrompt($user->id, 'session-1', 'dbmcp', 'Add login'));
+    (new EloquentPromptRepository)->save(new UserPrompt($user->id, 'session-1', 'dbmcp', 'Add login', teamId: contextFor($user)->teamId));
 
     $this->withToken($current)->deleteJson('/api/account', ['email' => 'ada@example.com'])
         ->assertNoContent()
