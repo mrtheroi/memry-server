@@ -13,6 +13,8 @@ use Illuminate\Support\Facades\Event;
 
 uses(RefreshDatabase::class);
 
+beforeEach(fn () => allowRowsWithoutTeam());
+
 function legacyObservation(User $user, ?string $project, array $overrides = []): int
 {
     return DB::table('observations')->insertGetId($overrides + [

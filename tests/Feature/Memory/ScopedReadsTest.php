@@ -114,6 +114,7 @@ function insertLegacyRows(User $user): void
 }
 
 test('the upgrade migration backfills legacy rows instead of refusing to run', function () {
+    allowRowsWithoutTeam();
     $user = User::factory()->withoutPersonalTeam()->create();
     insertLegacyRows($user);
 
@@ -125,6 +126,7 @@ test('the upgrade migration backfills legacy rows instead of refusing to run', f
 });
 
 test('the upgrade migration still refuses when rows remain without a team after the backfill', function () {
+    allowRowsWithoutTeam();
     $user = User::factory()->create();
     insertLegacyRows($user);
     app()->bind(BackfillTeams::class, fn () => new class extends BackfillTeams

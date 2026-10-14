@@ -105,15 +105,16 @@ test('a null project leaves project_id NULL and creates no project row', functio
         ->and(DB::table('projects')->count())->toBe(0);
 });
 
-test('a user without a team still saves, with the team columns NULL and the same response', function () {
+test('a user without a team still saves, into a personal team provisioned on the spot, with the same response', function () {
     $user = User::factory()->withoutPersonalTeam()->create();
 
     $response = MemoryServer::actingAs($user)->tool(SaveMemory::class, memoryArguments());
 
     $row = DB::table('observations')->sole();
     $response->assertExactText("Memory saved with id {$row->id}.");
-    expect([$row->team_id, $row->project_id, $row->created_by, $row->updated_by])->each->toBeNull()
-        ->and($row->user_id)->toBe($user->id);
+    expect($row->team_id)->toBe(personalTeamId($user))
+        ->and($row->project_id)->not->toBeNull()
+        ->and([$row->created_by, $row->updated_by, $row->user_id])->each->toBe($user->id);
 });
 
 test('a legacy NULL-team token resolves to the personal team and dual-writes', function () {
@@ -152,24 +153,21 @@ test('session-summary dual-writes team and authorship', function () {
         ->and($row->created_by)->toBe($user->id);
 });
 
-test('merge-projects moves project_id per team, keeps rows without a team NULL and the source project', function () {
+test('merge-projects moves project_id per team, keeps the source project', function () {
     [$ada, $bob] = User::factory()->count(2)->create();
-    $legacy = User::factory()->withoutPersonalTeam()->create();
-    $observation = fn (User $user, ?int $teamId, string $project) => (new EloquentMemoryRepository)->save(
+    $observation = fn (User $user, int $teamId, string $project) => (new EloquentMemoryRepository)->save(
         new Observation($user->id, 's', 'decision', 'T', 'C', $project, 'project', null, teamId: $teamId),
     );
-    $prompt = fn (User $user, ?int $teamId, string $project) => (new EloquentPromptRepository)->save(
+    $prompt = fn (User $user, int $teamId, string $project) => (new EloquentPromptRepository)->save(
         new UserPrompt($user->id, 's', $project, 'P', teamId: $teamId),
     );
     foreach ([$ada, $bob] as $user) {
         $observation($user, personalTeamId($user), 'old');
         $prompt($user, personalTeamId($user), 'old');
     }
-    $observation($legacy, null, 'old');
-    $prompt($legacy, null, 'old');
 
     $this->artisan('memory:merge-projects', ['from' => 'old', 'to' => ' New '])
-        ->expectsOutputToContain('Moved 3 observations and 3 prompts from old to new.')
+        ->expectsOutputToContain('Moved 2 observations and 2 prompts from old to new.')
         ->assertSuccessful();
 
     foreach (['observations', 'user_prompts'] as $table) {
@@ -179,8 +177,6 @@ test('merge-projects moves project_id per team, keeps rows without a team NULL a
             expect($row->project)->toBe('new')
                 ->and($row->project_id)->toBe(DB::table('projects')->where('team_id', $teamId)->where('name', 'new')->value('id'));
         }
-        $row = DB::table($table)->where('user_id', $legacy->id)->sole();
-        expect($row->project)->toBe('new')->and($row->project_id)->toBeNull();
     }
     expect(DB::table('projects')->where('name', 'old')->count())->toBe(2)
         ->and(DB::table('projects')->where('name', 'new')->count())->toBe(2);

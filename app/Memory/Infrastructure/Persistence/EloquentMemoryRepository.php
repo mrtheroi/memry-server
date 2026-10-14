@@ -5,6 +5,7 @@ namespace App\Memory\Infrastructure\Persistence;
 use App\Memory\Domain\MemoryRepository;
 use App\Memory\Domain\Observation;
 use App\Memory\Domain\ProjectRepository;
+use App\Team\Application\ProvisionPersonalTeam;
 use App\Team\Domain\AccessContext;
 use Illuminate\Database\Eloquent\Builder;
 
@@ -14,9 +15,11 @@ final class EloquentMemoryRepository implements MemoryRepository
 
     public function save(Observation $observation): Observation
     {
+        // Every row belongs to a team (NOT NULL); a writer that resolved none gets its personal one.
+        $teamId = $observation->teamId ?? app(ProvisionPersonalTeam::class)->forUser($observation->userId);
         $record = $observation->id === null
             ? new ObservationRecord
-            : $this->withinTeam(ObservationRecord::where('id', $observation->id), $observation->teamId)->firstOrFail();
+            : $this->withinTeam(ObservationRecord::where('id', $observation->id), $teamId)->firstOrFail();
         $record->user_id ??= $observation->userId;
         $record->fill([
             'session_id' => $observation->sessionId,
@@ -26,21 +29,14 @@ final class EloquentMemoryRepository implements MemoryRepository
             'project' => $observation->project,
             'scope' => $observation->scope,
             'topic_key' => $observation->topicKey,
+            'team_id' => $teamId,
+            'project_id' => $observation->project === null
+                ? null
+                : $this->projects->getOrCreateId($teamId, $observation->project),
+            'updated_by' => $observation->userId,
         ]);
 
-        if ($observation->teamId !== null) {
-            $record->fill([
-                'team_id' => $observation->teamId,
-                'project_id' => $observation->project === null
-                    ? null
-                    : $this->projects->getOrCreateId($observation->teamId, $observation->project),
-                'updated_by' => $observation->userId,
-            ]);
-
-            // a new row, or a legacy row being adopted, is authored by its owner
-            $record->created_by ??= $observation->userId;
-        }
-
+        $record->created_by ??= $observation->userId;
         $record->save();
 
         return $this->toDomain($record);
@@ -170,10 +166,9 @@ final class EloquentMemoryRepository implements MemoryRepository
             ->when(! $context->projects->isAll(), fn (Builder $scope) => $scope->whereIn('project_id', $context->projects->ids()));
     }
 
-    private function withinTeam(Builder $builder, ?int $teamId): Builder
+    private function withinTeam(Builder $builder, int $teamId): Builder
     {
-        return $builder->where(fn (Builder $scope) => $scope->whereNull('team_id')
-            ->when($teamId !== null, fn (Builder $scope) => $scope->orWhere('team_id', $teamId)));
+        return $builder->where('team_id', $teamId);
     }
 
     private function toDomain(ObservationRecord $record): Observation

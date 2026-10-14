@@ -7,8 +7,8 @@ use App\Team\Domain\AccessContext;
 use App\Team\Domain\AccessDenied;
 
 /**
- * Write gate shared by the save paths. A denied context is the legacy user without a team,
- * which still writes the legacy columns only; it never reaches a team's projects.
+ * Write gate shared by the save paths. A denied context is a user without a resolvable team;
+ * the repositories give it its personal team on write, so it never reaches another team's projects.
  */
 final class AuthorizeProjectWrite
 {

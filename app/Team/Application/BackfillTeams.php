@@ -7,8 +7,10 @@ use App\Memory\Domain\ProjectRepository;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Run once after dual-write (task 6) is deployed; re-running is safe; it only
- * fills rows that still have no team. Resumable: processed per user, each
+ * Heals rows that still have no team (observations and user_prompts are NOT NULL since the contract
+ * migrations, so it normally finds none; tokens may still lack one) and, with --check, reports what
+ * is missing: it must be 0 before those migrations run. Re-running is safe; it only fills rows that
+ * still have no team. Resumable: processed per user, each
  * transaction commits as a whole (user row locked first), every UPDATE is
  * guarded with `team_id IS NULL` so a row written by newer code is never
  * overwritten, and user_id / updated_at are never written.
