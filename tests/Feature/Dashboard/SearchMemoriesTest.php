@@ -85,3 +85,11 @@ test('a project named 0 filters the search instead of being treated as no filter
     expect(array_column(readAs(bearerOf($ada), '/api/memories/search?q=sanctum&project=0')->assertOk()->json('data'), 'title'))->toBe(['In zero'])
         ->and(array_column(searchFor($ada, 'sanctum', 10, '0'), 'title'))->toBe(['In zero']);
 });
+
+test('the search normalizes the project filter like the list and the MCP search', function () {
+    $ada = User::factory()->create();
+    remember($ada, 'In dbmcp', 'sanctum', 'dbmcp');
+    remember($ada, 'Elsewhere', 'sanctum', 'other');
+
+    expect(array_column(readAs(bearerOf($ada), '/api/memories/search?q=sanctum&project=DbMcp')->assertOk()->json('data'), 'title'))->toBe(['In dbmcp']);
+});

@@ -87,7 +87,7 @@ final class EloquentMemoryRepository implements MemoryRepository
         }
 
         $page = $this->scopeToReadable(ObservationRecord::query(), $context)
-            ->when($project !== null, fn (Builder $builder) => $builder->where('project', ProjectName::normalize($project)))
+            ->tap(fn (Builder $builder) => $this->inProject($builder, $project))
             ->when($type !== null, fn (Builder $builder) => $builder->where('type', $type))
             ->orderByDesc('updated_at')
             ->orderByDesc('id')
@@ -126,6 +126,17 @@ final class EloquentMemoryRepository implements MemoryRepository
      * @param  callable(Builder): Builder  $scope
      * @return list<Observation>
      */
+    /**
+     * The one project filter of the read paths: any spelling is normalized like the stored
+     * names, so no entry point (HTTP or MCP) can forget it; null means every project.
+     */
+    private function inProject(Builder $builder, ?string $project): Builder
+    {
+        $name = $project === null ? null : ProjectName::normalize($project);
+
+        return $name === null ? $builder : $builder->where('project', $name);
+    }
+
     private function ranked(AccessContext $context, string $query, int $limit, ?string $project, callable $scope): array
     {
         if ($context->isDenied()) {
@@ -133,7 +144,7 @@ final class EloquentMemoryRepository implements MemoryRepository
         }
 
         return $scope(ObservationRecord::query())
-            ->when($project !== null, fn ($builder) => $builder->where('project', $project))
+            ->tap(fn (Builder $builder) => $this->inProject($builder, $project))
             ->whereRaw("search_vector @@ websearch_to_tsquery('english', ?)", [$query])
             ->orderByRaw("ts_rank(search_vector, websearch_to_tsquery('english', ?)) DESC", [$query])
             ->limit($limit)
