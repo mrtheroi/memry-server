@@ -12,7 +12,7 @@ class ShowMemoryController extends Controller
     public function __invoke(string $id, ShowMemory $showMemory, AccessContext $context): JsonResponse
     {
         // Ids past the bigint range cannot exist; answering here keeps them out of the query and the same 404.
-        $memory = strlen($id) > 18 ? null : $showMemory($context, (int) $id);
+        $memory = filter_var($id, FILTER_VALIDATE_INT) === false ? null : $showMemory($context, (int) $id);
 
         abort_if($memory === null, 404);
 

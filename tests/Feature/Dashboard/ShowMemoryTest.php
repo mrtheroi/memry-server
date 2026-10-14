@@ -79,3 +79,13 @@ test('a user without a team reads nothing: empty collections and a 404 for any i
         ->and(readAs($headers, '/api/memories/search?q=sanctum')->assertOk()->json('data'))->toBe([]);
     readAs($headers, "/api/memories/{$memory->id}")->assertNotFound();
 });
+
+test('ids up to the bigint maximum are looked up and anything above is the same 404', function () {
+    $ada = User::factory()->create();
+    $memory = remember($ada, 'Huge id', 'content');
+    DB::table('observations')->where('id', $memory->id)->update(['id' => PHP_INT_MAX]);
+    $missing = readAs(bearerOf($ada), '/api/memories/999999')->assertNotFound();
+
+    readAs(bearerOf($ada), '/api/memories/'.PHP_INT_MAX)->assertOk()->assertJsonPath('data.title', 'Huge id');
+    expect(readAs(bearerOf($ada), '/api/memories/9223372036854775808')->assertNotFound()->getContent())->toBe($missing->getContent());
+});

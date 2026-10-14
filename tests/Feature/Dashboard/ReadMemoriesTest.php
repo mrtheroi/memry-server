@@ -114,3 +114,19 @@ test('the memory list works under a dashboard session', function () {
 
     sessionOf($ada)->getJson('/api/memories')->assertOk()->assertJsonPath('data.0.title', 'One');
 });
+
+test('a project named 0 filters the list instead of being treated as no filter', function () {
+    $ada = User::factory()->create();
+    remember($ada, 'In zero', 'content', '0');
+    remember($ada, 'Elsewhere', 'content', 'alpha');
+
+    expect(array_column(readAs(bearerOf($ada), '/api/memories?project=0')->assertOk()->json('data'), 'title'))->toBe(['In zero']);
+});
+
+test('a cursor with an impossible date answers 422, not a server error', function () {
+    $ada = User::factory()->create();
+    remember($ada, 'One', 'content');
+    $forged = rtrim(strtr(base64_encode(json_encode(['updated_at' => '2026-02-30 10:00:00', 'id' => 1, '_pointsToNextItems' => true])), '+/', '-_'), '=');
+
+    readAs(bearerOf($ada), "/api/memories?cursor={$forged}")->assertUnprocessable()->assertJsonValidationErrors('cursor');
+});

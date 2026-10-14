@@ -10,6 +10,7 @@ use App\Memory\Domain\ProjectName;
 use App\Memory\Domain\ProjectRepository;
 use App\Team\Domain\AccessContext;
 use App\Team\Domain\AccessDenied;
+use DateTimeImmutable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Pagination\Cursor;
 
@@ -132,7 +133,7 @@ final class EloquentMemoryRepository implements MemoryRepository
         }
 
         return $scope(ObservationRecord::query())
-            ->when($project, fn ($builder) => $builder->where('project', $project))
+            ->when($project !== null, fn ($builder) => $builder->where('project', $project))
             ->whereRaw("search_vector @@ websearch_to_tsquery('english', ?)", [$query])
             ->orderByRaw("ts_rank(search_vector, websearch_to_tsquery('english', ?)) DESC", [$query])
             ->limit($limit)
@@ -244,9 +245,19 @@ final class EloquentMemoryRepository implements MemoryRepository
         $parameters = $cursor->toArray();
 
         return array_keys($parameters) === ['updated_at', 'id', '_pointsToNextItems']
-            && is_string($parameters['updated_at']) && strtotime($parameters['updated_at']) !== false
+            && $this->isTimestamp($parameters['updated_at'])
             && is_int($parameters['id'])
             && is_bool($parameters['_pointsToNextItems']);
+    }
+
+    /**
+     * The exact `Y-m-d H:i:s` a cursor carries; impossible dates such as 2026-02-30 do not round-trip.
+     */
+    private function isTimestamp(mixed $value): bool
+    {
+        return is_string($value)
+            && ($date = DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $value)) !== false
+            && $date->format('Y-m-d H:i:s') === $value;
     }
 
     private function withinTeam(Builder $builder, int $teamId): Builder
