@@ -3,7 +3,7 @@
 #
 # Runs install.sh (with --no-cli) twice in a temporary directory, reading
 # docker-compose.yml and the example .env from this checkout. After each run it
-# checks that /up answers 200 and that the printed token lists the six memory
+# checks that /up answers 200 and that a token made with the printed command lists the six memory
 # tools at /mcp/memory; the second run must keep APP_KEY and DB_PASSWORD, and a
 # run without .env must refuse to touch the existing database volume.
 # Everything is torn down (including volumes and the directory) on exit unless
@@ -53,8 +53,8 @@ env_value() {
     sed -n "s/^$1=//p" "${install_dir}/.env" | tail -n 1
 }
 
-# Runs install.sh and sets $token from its output. The output is shown with
-# the token redacted.
+# Runs install.sh, which with --no-cli issues no token, then creates one with
+# the on-request command it prints and sets $token. Token output is redacted.
 install() {
     local out="${work_dir}/install.out"
     if ! MEMRY_SOURCE_DIR="$root" MEMRY_IMAGE="$MEMRY_IMAGE" \
@@ -62,9 +62,12 @@ install() {
         cat "$out"
         fail "install.sh exited with an error"
     fi
-    token="$(awk '/^Your memry token/ { getline; getline; sub(/^ +/, ""); print; exit }' "$out")"
-    [ -n "$token" ] || { cat "$out"; fail "install.sh printed no token"; }
-    sed "s#${token}#<token>#g" "$out"
+    cat "$out"
+    grep -q "docker compose run --rm app token 'e2e@example.com'" "$out" \
+        || fail "install.sh did not print the command to create a token"
+    token="$(cd "$install_dir" && docker compose run --rm -T app token e2e@example.com \
+        | tr -d '\r' | sed -n 's/^Token: //p' | tail -n 1)"
+    [ -n "$token" ] || fail "the token command printed no token"
 }
 
 check_server() {
