@@ -168,6 +168,13 @@ function readAs(array $headers, string $uri): Illuminate\Testing\TestResponse
     return test()->withHeaders($headers)->getJson($uri);
 }
 
+function deleteAs(array $headers, string $uri): Illuminate\Testing\TestResponse
+{
+    app('auth')->forgetGuards();
+
+    return test()->withHeaders($headers)->deleteJson($uri);
+}
+
 /*
  * The shipped policy grants members no project yet; pin one to exercise the filter. Null grants every project.
  *

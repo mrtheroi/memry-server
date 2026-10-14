@@ -161,6 +161,32 @@ curl -s -b jar -H "Origin: https://app.memry.com.mx" "https://<api-host>/api/mem
 curl -s -b jar -H "Origin: https://app.memry.com.mx" "https://<api-host>/api/memories?cursor=<meta.next_cursor>&project=memry&type=session_summary&per_page=20"
 ```
 
+## Dashboard: deleting
+
+`DELETE /api/memories/{id}` hard-deletes one memory (the row is removed; nothing references it, so there are no cascades). It works with a dashboard session or a bearer token and shares the `dashboard` rate limit (120 per minute per user). Under a session it needs the CSRF token like any state-changing request.
+
+Visibility comes first. A memory the caller cannot read (a missing id, an id out of range, another team, an ungranted project, another member's `personal` memory, even for the owner) answers the same `404` as `GET /api/memories/{id}`, so a hidden memory cannot be told apart from a missing one. Only then are the permissions checked:
+
+| Caller | Memory | Result |
+| --- | --- | --- |
+| Author | their own, any scope | `204` |
+| Owner or admin | any `project`-scope memory they can read | `204` |
+| Member | another member's `project`-scope memory | `403` `{"message": "You can only delete your own memories."}` |
+| Anyone | not readable (see above) | `404` |
+
+| Status | When |
+| --- | --- |
+| `204` | The memory is deleted |
+| `401` | No credentials |
+| `403` | The caller can read the memory but may only delete their own |
+| `404` | Missing, out of range or not readable |
+| `429` | Rate limit exceeded |
+
+```bash
+curl -s -X DELETE -b jar -H "Origin: https://app.memry.com.mx" -H "X-XSRF-TOKEN: <token>" https://<api-host>/api/memories/12
+# 204
+```
+
 ## Account deletion
 
 `DELETE /api/account` deletes the authenticated user and all of their data: memories, prompts, every token (not only the one used for the request) and pending login codes. The body must repeat the account email, so a stray call cannot delete the account. The email is trimmed and lowercased, as in the login endpoints. It shares the rate limit of `/mcp/memory` and `/api/context`.
@@ -178,3 +204,5 @@ curl -s -X DELETE https://<your-host>/api/account \
 | `401` | Missing or invalid token |
 | `422` | `email` missing, not a string, or not the email of the account |
 | `429` | Rate limit exceeded |
+
+**Under a dashboard session** the same request works (with the CSRF token) and also ends the session: the user is signed out, the session is invalidated and its CSRF token regenerated, so the next call answers `401`. The response stays `204`. A mismatched `email` answers `422` and keeps the session. `DELETE /api/auth/tokens/{id}` also works under a session.

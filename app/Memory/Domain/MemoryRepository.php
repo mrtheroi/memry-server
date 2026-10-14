@@ -52,6 +52,11 @@ interface MemoryRepository
      */
     public function pageVisible(AccessContext $context, ?string $project, ?string $type, ?string $cursor, int $perPage): MemoryPage;
 
+    /**
+     * Hard delete of one row of the context team; false when no such row exists there.
+     */
+    public function deleteInTeam(AccessContext $context, int $id): bool;
+
     public function findVisible(AccessContext $context, int $id): ?Observation;
 
     /**
