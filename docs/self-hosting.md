@@ -47,13 +47,34 @@ Run the `docker compose` commands in this guide from the install directory, in a
 
 If `.env` is missing but a database volume of that directory still exists (`<project>_postgres-data`, or `<directory>_postgres-data` from an install without `COMPOSE_PROJECT_NAME`), the script stops instead of generating a new `DB_PASSWORD` the database would reject. Restore the old `.env` (back it up: it holds `APP_KEY` and `DB_PASSWORD`), or delete the volume and all its data with `docker volume rm <project>_postgres-data`, then run the script again. If the volume belongs to another installation in a directory with the same name, install into a directory with another name.
 
-To see every memry database volume and which install owns it, run `sh install.sh --doctor` (read only: it pulls, starts, writes and deletes nothing, needs no email and cannot be combined with other options). For each volume labelled by Compose, or named `*_postgres-data`, it prints the Compose project, the install directory (the working directory recorded on a container of that project, running or stopped, or `unknown`) and a status:
+The installer also has a read-only diagnostic, `--doctor`. It pulls, starts, writes and deletes nothing, needs no email and takes no option except `--dir`. The quick start script is downloaded to a temporary file, so there is no `install.sh` in your install directory: run it the same way, pinned to the same release.
 
-- `in use`: a container of the project exists and its install directory is present (or not recorded);
-- `directory missing`: a container recorded an install directory that no longer exists;
-- `orphaned`: the project has no container at all, so no install owns the volume.
+To check one install directory, which is the case when `.env` was lost:
 
-For orphaned volumes it prints `docker volume inspect <name>` and `docker volume rm <name>`. Deleting a volume removes every memory in it; the doctor never deletes anything.
+```bash
+curl -fsSL https://raw.githubusercontent.com/mrtheroi/memry-server/v0.18.1/install.sh | sh -s -- --doctor --dir <directory>
+```
+
+It finds the database volumes of that install with the installer's own rules (the `COMPOSE_PROJECT_NAME` in its `.env`; without a `.env`, the project name with the directory checksum and the plain directory-name project), then reports whether `.env`, the volume and containers exist:
+
+- healthy: nothing to do;
+- stopped: the data is intact; start it with `cd <directory> && docker compose up -d`;
+- `.env` missing but the volume exists: restore the old `.env` (it holds `APP_KEY` and `DB_PASSWORD`) and run the installer again, or, only if you do not want the data, `docker volume rm <volume>`, which removes every memory in it and cannot be undone. This is the only case where the doctor prints a delete command, because the volume is proven to belong to that directory;
+- no volume for that install: it says so.
+
+Without `--dir` the doctor only lists, for information:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mrtheroi/memry-server/v0.18.1/install.sh | sh -s -- --doctor
+```
+
+For each volume labelled by Compose as `postgres-data`, or named `*_postgres-data`, it prints the Compose project, the creation date, the containers of that project with their working directory, and a status:
+
+- `memry install at <directory>`: a container of the project runs a `memry-server` image (it also says when that directory no longer exists);
+- `stopped or unconfirmed (no containers)`: the project has no containers. It may be a memry install stopped with `docker compose down` (which keeps the volume) or the database of another project, so nothing is proven;
+- `not memry (containers use other images)`: the containers of the project do not run a `memry-server` image.
+
+The volume carries no memry label, so a volume alone never proves ownership, and this mode never prints a delete command. The doctor never deletes anything; if a Docker command it needs fails, it exits with an error instead of reporting an empty result.
 
 Running the script again is safe: an existing `.env` is kept (only empty required values are filled in), so `APP_KEY` and `DB_PASSWORD` never change. Each run that connects your agents issues a new token; revoke old ones with `memory:revoke` (see [Users and tokens](#users-and-tokens)). To upgrade later, follow [Upgrades](#upgrades). Put a TLS proxy in front before exposing the server beyond your machine ([Reverse proxy and TLS](#reverse-proxy-and-tls)).
 

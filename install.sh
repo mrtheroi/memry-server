@@ -29,7 +29,7 @@ SELF_HOSTING_DOCS="https://github.com/mrtheroi/memry-server/blob/v${MEMRY_VERSIO
 usage() {
     cat <<'USAGE'
 Usage: sh install.sh --email you@example.com [options]
-       sh install.sh --doctor
+       sh install.sh --doctor [--dir DIR]
 
 Installs memry Community (a self-hosted memry server) with Docker and connects
 your agents to it.
@@ -41,8 +41,8 @@ Options:
   --agents LIST      Agents to connect, comma-separated (e.g. claude-code,codex);
                      without it, memry setup asks
   --no-cli           Do not install or run the memry CLI; print how to create a token
-  --doctor           List the memry database volumes and which install owns
-                     them (read only; takes no other option)
+  --doctor           Read only: list the database volumes that may be memry's, or
+                     with --dir DIR check that install (takes no other option)
   -h, --help         Show this help
 
 Requires Docker with Compose v2 (https://docs.docker.com/get-docker/) and curl.
@@ -64,10 +64,11 @@ parse_args() {
     AGENTS=""
     INSTALL_CLI=1
     DOCTOR=0
+    DIR_GIVEN=0
     install_option=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --email | --email=* | --dir | --dir=* | --port | --port=* | --agents | --agents=* | --no-cli)
+            --email | --email=* | --port | --port=* | --agents | --agents=* | --no-cli)
                 install_option="${1%%=*}" ;;
         esac
         case "$1" in
@@ -75,8 +76,8 @@ parse_args() {
             --doctor) DOCTOR=1 ;;
             --email) [ $# -ge 2 ] || usage_error "--email needs a value"; EMAIL="$2"; shift ;;
             --email=*) EMAIL="${1#*=}" ;;
-            --dir) [ $# -ge 2 ] || usage_error "--dir needs a value"; DIR="$2"; shift ;;
-            --dir=*) DIR="${1#*=}" ;;
+            --dir) [ $# -ge 2 ] || usage_error "--dir needs a value"; DIR="$2"; DIR_GIVEN=1; shift ;;
+            --dir=*) DIR="${1#*=}"; DIR_GIVEN=1 ;;
             --port) [ $# -ge 2 ] || usage_error "--port needs a value"; PORT="$2"; shift ;;
             --port=*) PORT="${1#*=}" ;;
             --agents) [ $# -ge 2 ] || usage_error "--agents needs a value"; AGENTS="$2"; shift ;;
@@ -154,13 +155,17 @@ fetch() {
     mv "$part" "$2"
 }
 
-download_files() {
-    # A literal ~ (as in --dir=~/memry) is not expanded by the shell.
+# A literal ~ (as in --dir=~/memry) is not expanded by the shell.
+expand_tilde() {
     # shellcheck disable=SC2088
     case "$DIR" in
         "~") DIR="$HOME" ;;
         "~/"*) DIR="${HOME}/${DIR#"~/"}" ;;
     esac
+}
+
+download_files() {
+    expand_tilde
     mkdir -p "$DIR"
     DIR="$(cd "$DIR" && pwd)"
     # The directory as it can be pasted into a shell, for the printed commands.
@@ -527,61 +532,185 @@ Docs: ${SELF_HOSTING_DOCS}
 SUMMARY
 }
 
+# is_memry_image <image reference>: the repository is memry-server, whatever
+# the registry, tag or digest (ghcr.io/mrtheroi/memry-server:0.18.1,
+# memry-server:local, memry-server:pinned-..., ...@sha256:...).
+is_memry_image() {
+    name="${1##*/}"
+    name="${name%%@*}"
+    name="${name%%:*}"
+    [ "$name" = "memry-server" ]
+}
+
 # doctor: lists the memry database volumes (read only). Compose labels name
 # the project of a volume and, on its containers, the directory it was started
 # from. Volumes named *_postgres-data count even without labels.
+#
+# Ownership is never claimed from the volume alone: memry's compose file puts
+# no memry label on the volume and must not (Compose hashes the volume's whole
+# config, labels included, and would offer to recreate an existing volume with
+# its data). The only evidence is a container of the project that runs a
+# memry-server image.
 doctor() {
-    volumes="$( { docker volume ls --filter label=com.docker.compose.volume=postgres-data --format '{{.Name}}'
-        docker volume ls --format '{{.Name}}' | grep '_postgres-data$'; } 2>/dev/null | sort -u)"
+    labeled="$(docker volume ls --filter label=com.docker.compose.volume=postgres-data --format '{{.Name}}')" \
+        || die "could not list the Docker volumes: docker volume ls failed."
+    named="$(docker volume ls --format '{{.Name}}')" \
+        || die "could not list the Docker volumes: docker volume ls failed."
+    # Only a grep that finds nothing counts as an empty list.
+    suffixed="$(printf '%s\n' "$named" | grep '_postgres-data$' || true)"
+    volumes="$(printf '%s\n%s\n' "$labeled" "$suffixed" | sed '/^$/d' | sort -u)"
     if [ -z "$volumes" ]; then
         say "No memry database volumes found."
         return
     fi
-    orphans=""
     for volume in $volumes; do
-        project="$(docker volume inspect --format '{{index .Labels "com.docker.compose.project"}}' "$volume" 2>/dev/null)"
+        project="$(docker volume inspect --format '{{index .Labels "com.docker.compose.project"}}' "$volume")" \
+            || die "could not inspect the volume ${volume}: docker volume inspect failed."
         # A volume without labels is named <project>_postgres-data by Compose.
         [ -n "$project" ] || project="${volume%_postgres-data}"
-        # One "dir=<working_dir label>" line per container, running or not.
-        # Never filter on an empty project: it would match unrelated containers.
-        containers=""
-        if [ -n "$project" ]; then
-            containers="$(docker ps -a --filter "label=com.docker.compose.project=${project}" \
-                --format 'dir={{.Label "com.docker.compose.project.working_dir"}}' 2>/dev/null)"
-        fi
-        install_dir="$(printf '%s\n' "$containers" | sed -n 's/^dir=\(.\)/\1/p' | head -n 1)"
-        if [ -z "$containers" ]; then
-            status="orphaned"
-            orphans="${orphans} ${volume}"
-        elif [ -n "$install_dir" ] && [ ! -d "$install_dir" ]; then
-            status="directory missing"
-        else
-            status="in use"
-        fi
+        created="$(docker volume inspect --format '{{.CreatedAt}}' "$volume")" \
+            || die "could not inspect the volume ${volume}: docker volume inspect failed."
         say "${volume}"
         say "  project: ${project}"
-        say "  install: ${install_dir:-unknown}"
-        say "  status: ${status}"
+        say "  created: ${created}"
+        project_containers "$project"
+        print_containers
+        project_status
     done
-    [ -z "$orphans" ] || print_orphan_hint
+    say ""
+    say "To check an install directory, run the doctor with --dir <directory>."
+    say "The doctor never deletes anything."
 }
 
-# The commands for an orphaned volume. Nothing is ever deleted here.
-print_orphan_hint() {
-    say ""
-    say "Orphaned volumes belong to no container and no install this script can find."
-    for volume in $orphans; do
-        say "  inspect: docker volume inspect ${volume}"
-        say "  delete:  docker volume rm ${volume}"
+# doctor_dir: proves what belongs to ONE install directory (read only). The
+# volume names come from the installer's own logic (the project in .env, or
+# for a missing .env the hashed and the legacy directory-name projects), so a
+# volume found here is that install's, never another stack's.
+doctor_dir() {
+    expand_tilde
+    # Nothing is created here: a missing directory is only reported.
+    if [ -d "$DIR" ]; then
+        DIR="$(cd "$DIR" && pwd)"
+    else
+        case "$DIR" in /*) ;; *) DIR="$(pwd)/${DIR}" ;; esac
+    fi
+    QDIR="$(shell_quote "$DIR")"
+    all_volumes="$(docker volume ls --format '{{.Name}}')" \
+        || die "could not list the Docker volumes: docker volume ls failed."
+    env_file="${DIR}/.env"
+    if [ -f "$env_file" ]; then
+        project="$(env_get COMPOSE_PROJECT_NAME "$env_file")"
+        # Without the key an install uses Compose's default project.
+        [ -n "$project" ] || project="$(default_project_name)"
+        projects="$project"
+    else
+        projects="$(project_name) $(default_project_name)"
+    fi
+    say "Install directory: ${DIR}"
+    if [ -f "$env_file" ]; then say ".env: present"; else say ".env: missing"; fi
+    found_volumes=""
+    container_count=0
+    checked=""
+    for project in $projects; do
+        volume="${project}_postgres-data"
+        checked="${checked:+${checked}, }${volume}"
+        if printf '%s\n' "$all_volumes" | grep -Fxq -- "$volume"; then
+            found_volumes="${found_volumes} ${volume}"
+        fi
+        project_containers "$project"
+        [ -z "$CONTAINERS" ] || container_count=$((container_count + 1))
     done
-    say "Deleting a volume removes every memory in it and cannot be undone. Nothing was deleted."
+    for volume in $found_volumes; do
+        say "volume: ${volume}"
+    done
+    say "containers: $([ "$container_count" -gt 0 ] && echo present || echo none)"
+    say ""
+    if [ -z "$found_volumes" ]; then
+        say "No database volume of this install exists (checked: ${checked})."
+    elif [ ! -f "$env_file" ]; then
+        say "The database volume of this install exists, but ${env_file} is missing, and the"
+        say "volume uses the password of the old .env. Choose one:"
+        say ""
+        say "  1. Restore that .env (it holds APP_KEY and DB_PASSWORD), then run the installer again."
+        say "  2. Only if you do not want the data, delete the volume:"
+        for volume in $found_volumes; do
+            say "         docker volume rm ${volume}"
+        done
+        say "     This removes every memory in it and cannot be undone."
+        say ""
+        say "If the volume belongs to another installation in a directory with the same name,"
+        say "install into a directory with another name."
+    elif [ "$container_count" -eq 0 ]; then
+        say "Stopped: the data is intact. Start it with:"
+        say ""
+        say "    cd ${QDIR} && docker compose up -d"
+    else
+        say "Healthy: .env, the database volume and the containers are all present. Nothing to do."
+    fi
+    say "The doctor never deletes anything."
+}
+
+# print_containers: the containers found by project_containers.
+print_containers() {
+    [ -n "$CONTAINERS" ] || return 0
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        image="${line#image=}"
+        image="${image%% dir=*}"
+        say "  container: ${image} in ${line#*' dir='}"
+    done <<LINES
+${CONTAINERS}
+LINES
+}
+
+# project_containers <project>: sets CONTAINERS to one "image=<image> dir=<dir>"
+# line per container (running or not) of the Compose project, MEMRY_FOUND to 1
+# when one of them runs a memry-server image and MEMRY_DIR to that container's
+# install directory. Never filters on an empty project: it would match
+# unrelated containers.
+project_containers() {
+    CONTAINERS=""
+    MEMRY_DIR=""
+    MEMRY_FOUND=0
+    [ -n "$1" ] || return 0
+    CONTAINERS="$(docker ps -a --filter "label=com.docker.compose.project=${1}" \
+        --format 'image={{.Image}} dir={{.Label "com.docker.compose.project.working_dir"}}')" \
+        || die "could not list the containers of the project ${1}: docker ps failed."
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        image="${line#image=}"
+        image="${image%% dir=*}"
+        if is_memry_image "$image"; then
+            MEMRY_FOUND=1
+            MEMRY_DIR="${line#*' dir='}"
+            return 0
+        fi
+    done <<LINES
+${CONTAINERS}
+LINES
+}
+
+project_status() {
+    if [ "$MEMRY_FOUND" = 1 ]; then
+        if [ -n "$MEMRY_DIR" ] && [ ! -d "$MEMRY_DIR" ]; then
+            say "  status: memry install at ${MEMRY_DIR} (the directory no longer exists)"
+        else
+            say "  status: memry install at ${MEMRY_DIR:-unknown}"
+        fi
+    elif [ -z "$CONTAINERS" ]; then
+        say "  status: stopped or unconfirmed (no containers)"
+        say "  It may be a memry install stopped with \`docker compose down\` (that keeps the"
+        say "  volume), or the database of another project."
+    else
+        say "  status: not memry (containers use other images)"
+    fi
 }
 
 main() {
     parse_args "$@"
     preflight
     if [ "$DOCTOR" = 1 ]; then
-        doctor
+        if [ "$DIR_GIVEN" = 1 ]; then doctor_dir; else doctor; fi
         exit 0
     fi
     download_files
