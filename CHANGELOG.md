@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`install.sh --doctor` edge cases.** When `docker compose config` fails and the `COMPOSE_PROJECT_NAME` in `.env` is an interpolation expression (for example `${PROJECT_NAME:-memry}`), the doctor now says the name cannot be resolved, makes no volume or container claim (`containers: not checked`) and prints no `docker volume rm`, instead of searching for a literal volume. A `--dir` path that does not exist and contains a `.`, `..` or empty (`//`) segment (after one leading `./` and one trailing `/`) is now refused with a usage error before any Docker call, even on a host without Docker ("Pass the install directory as the installer printed it: an absolute path without . or .. segments."), because a symlink changes where `..` leads and the doctor could otherwise look at, and offer to delete, another install's volume. Existing directories are canonicalized as before
+
 ---
 
 ## [0.19.0] - 2026-10-14

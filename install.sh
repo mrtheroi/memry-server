@@ -172,8 +172,8 @@ canonical_dir() {
 
 # canonical_dir_or_missing <path>: the same absolute path for a directory that
 # may not exist, without creating it. A missing directory is its canonical
-# parent plus its name; with no parent either, the path made absolute with the
-# "." segments removed.
+# parent plus its name; with no parent either, the path made absolute. Dot
+# segments in a missing path are refused by the caller, never folded.
 canonical_dir_or_missing() {
     if [ -d "$1" ]; then canonical_dir "$1"; return; fi
     trimmed="${1%/}"
@@ -183,8 +183,10 @@ canonical_dir_or_missing() {
         case "$parent" in /) printf '/%s' "$(basename "$trimmed")" ;; *) printf '%s/%s' "$parent" "$(basename "$trimmed")" ;; esac
         return
     fi
-    case "$trimmed" in /*) absolute="$trimmed" ;; *) absolute="$(pwd)/${trimmed}" ;; esac
-    printf '%s' "$absolute" | sed -e 's|/\(\./\)\{1,\}|/|g' -e 's|/\.$||' -e 's|//*|/|g'
+    case "$trimmed" in
+        /*) printf '%s' "$trimmed" ;;
+        *) here="$(pwd)"; printf '%s/%s' "${here%/}" "${trimmed#./}" ;;
+    esac
 }
 
 download_files() {
@@ -605,6 +607,21 @@ doctor() {
     say "The doctor never deletes anything."
 }
 
+# require_printed_dir_path: a directory that does not exist must be given as
+# the installer printed it. After one leading "./" and one trailing "/", it may
+# have no empty, "." or ".." segment: the installer's pwd folds them, and a
+# symlink changes where ".." leads, so the doctor refuses to guess.
+require_printed_dir_path() {
+    expand_tilde
+    [ ! -d "$DIR" ] || return 0
+    printed="${DIR#./}"
+    printed="${printed%/}"
+    case "$printed" in /*) ;; *) printed="/${printed}" ;; esac
+    case "${printed}/" in
+        */./* | */../* | *//*) usage_error "Pass the install directory as the installer printed it: an absolute path without . or .. segments." ;;
+    esac
+}
+
 # doctor_dir: proves what belongs to ONE install directory (read only). The
 # volume names come from the installer's own logic (the project in .env, or
 # for a missing .env the hashed and the legacy directory-name projects), so a
@@ -618,6 +635,7 @@ doctor_dir() {
         || die "could not list the Docker volumes: docker volume ls failed."
     env_file="${DIR}/.env"
     unconfirmed=0
+    unresolved=0
     if [ -f "$env_file" ]; then
         # Compose resolves interpolation and its defaults exactly: ask it, with
         # the installer's isolated environment. The top-level "name:" of the
@@ -625,17 +643,23 @@ doctor_dir() {
         project="$(compose config 2>/dev/null | sed -n 's/^name:[[:space:]]*//p' | head -n 1 | tr -d "\"'")" || project=""
         if [ -z "$project" ]; then
             project="$(env_get COMPOSE_PROJECT_NAME "$env_file")"
+            # An expression cannot be resolved without Compose: claim nothing.
+            case "$project" in *'$'*) unresolved=1 ;; esac
             # Without the key an install uses Compose's default project.
             [ -n "$project" ] || project="$(default_project_name)"
             unconfirmed=1
         fi
         projects="$project"
+        [ "$unresolved" = 0 ] || projects=""
     else
         projects="$(project_name) $(default_project_name)"
     fi
     say "Install directory: ${DIR}"
     if [ -f "$env_file" ]; then say ".env: present"; else say ".env: missing"; fi
-    if [ "$unconfirmed" = 1 ]; then
+    if [ "$unresolved" = 1 ]; then
+        say "project: the name in .env uses variable interpolation and cannot be resolved,"
+        say "because docker compose config failed."
+    elif [ "$unconfirmed" = 1 ]; then
         say "project: ${project} (could not be confirmed with Compose; read from .env)"
     fi
     found_volumes=""
@@ -666,9 +690,16 @@ doctor_dir() {
     for volume in $found_volumes; do
         say "volume: ${volume}"
     done
-    say "containers: $([ "$container_count" -gt 0 ] && echo present || echo none)"
+    if [ "$unresolved" = 1 ]; then
+        say "containers: not checked (project name unresolved)"
+    else
+        say "containers: $([ "$container_count" -gt 0 ] && echo present || echo none)"
+    fi
     say ""
-    if [ -z "$found_volumes" ]; then
+    if [ "$unresolved" = 1 ]; then
+        say "No volume claim is made for this install. Restore docker-compose.yml from the"
+        say "release and run the doctor again."
+    elif [ -z "$found_volumes" ]; then
         say "No database volume of this install exists (checked: ${checked})."
     elif [ ! -f "$env_file" ]; then
         say "The database volume of this install exists, but ${env_file} is missing, and the"
@@ -757,6 +788,7 @@ project_status() {
 
 main() {
     parse_args "$@"
+    if [ "$DOCTOR" = 1 ] && [ "$DIR_GIVEN" = 1 ]; then require_printed_dir_path; fi
     preflight
     if [ "$DOCTOR" = 1 ]; then
         if [ "$DIR_GIVEN" = 1 ]; then doctor_dir; else doctor; fi
