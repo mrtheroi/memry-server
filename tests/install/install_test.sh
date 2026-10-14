@@ -453,7 +453,7 @@ test_pulls_resolved_images_with_the_callers_environment() {
     assert_log_not_contains "docker pull evil.example"
     assert_log_not_contains "compose pull"
     assert_log_contains "docker compose up"
-    assert_log_contains "docker compose run --rm -T app token"
+    assert_log_not_contains " token "
 }
 
 # `docker compose run --pull` only exists since Compose v2.32.2 (`up --pull`
@@ -475,7 +475,7 @@ compose_env_of_up_and_run() {
 # digest reference is local and never "latest".
 test_compose_runs_the_image_digest_it_pulled() {
     STUB_REPO_DIGESTS="ghcr.io/mrtheroi/memry-server@sha256:aaa111"
-    run_install --email you@example.com --dir "$DIR" --no-cli
+    run_install --email you@example.com --dir "$DIR"
     assert_status 0
     calls="$(compose_env_of_up_and_run)"
     [ "$(echo "$calls" | grep -c .)" -ge 3 ] || fail "expected migrate, up and token calls: $calls"
@@ -518,7 +518,7 @@ test_a_digestless_local_image_is_pinned_with_a_tag_from_its_id() {
     printf 'APP_KEY=base64:abc\nDB_PASSWORD=pw\nAPP_PORT=8000\nAPP_URL=http://localhost:8000\nMEMRY_IMAGE=memry-server:latest\n' > "${DIR}/.env"
     cp "${DIR}/.env" "${T}/before.env"
     STUB_IMAGE_ID="sha256:abcdef0123456789ffff"
-    run_install --email you@example.com --dir "$DIR" --no-cli
+    run_install --email you@example.com --dir "$DIR"
     assert_status 0
     assert_log_contains "docker tag memry-server:latest memry-server:pinned-abcdef012345"
     calls="$(compose_env_of_up_and_run)"
@@ -574,16 +574,15 @@ test_falls_back_to_a_local_image_only_when_it_exists() {
     assert_output_contains "could not pull ghcr.io/mrtheroi/memry-server:0.18.1"
 }
 
-test_no_cli_prints_the_token_once_with_the_setup_command() {
+test_no_cli_issues_no_token_and_prints_the_on_request_command() {
     STUB_TOKEN='12|Secr3tTokenValue'
     run_install --email you@example.com --dir "$DIR" --no-cli
     assert_status 0
-    assert_log_contains "docker compose run --rm -T app token you@example.com @ ${DIR}"
-    [ "$(grep -c '12|Secr3tTokenValue' "$OUT")" = 1 ] || fail "the token is not printed exactly once"
+    assert_log_not_contains " token "
+    assert_output_not_contains "Secr3tTokenValue"
+    assert_output_contains "cd ${DIR} && docker compose run --rm app token 'you@example.com'"
     assert_output_contains "store it like a password"
     assert_output_contains "memry setup --url http://localhost:8000 --token"
-    if grep -rqF 'Secr3tTokenValue' "$DIR"; then fail "the token was written to ${DIR}"; fi
-    if grep -q "$(printf '\r')" "$OUT"; then fail "carriage return left in the output"; fi
 }
 
 test_connects_agents_with_the_token_in_the_environment() {
@@ -598,12 +597,14 @@ test_connects_agents_with_the_token_in_the_environment() {
     assert_log_not_contains "brew "
 }
 
-test_prints_the_token_when_memry_setup_fails() {
+test_does_not_print_the_token_when_memry_setup_fails() {
     STUB_TOKEN='12|Secr3tTokenValue' STUB_SETUP_STATUS=1
     run_install --email you@example.com --dir "$DIR"
     assert_status 1
     assert_output_contains "memry setup failed"
-    [ "$(grep -c '12|Secr3tTokenValue' "$OUT")" = 1 ] || fail "the token is not printed exactly once"
+    assert_output_not_contains "Secr3tTokenValue"
+    assert_output_contains "expires after 30 days"
+    assert_output_contains "docker compose run --rm app token 'you@example.com'"
     assert_output_contains "memry setup --url http://localhost:8000 --token"
 }
 
@@ -620,13 +621,15 @@ STUB
     assert_log_contains "memry setup --url http://localhost:8000 --token"
 }
 
-test_without_brew_prints_instructions_and_the_token() {
+test_without_brew_prints_instructions_and_issues_no_token() {
     rm "${STUBS}/memry" "${STUBS}/brew"
     STUB_TOKEN='12|Secr3tTokenValue'
     run_install --email you@example.com --dir "$DIR" --agents codex
     assert_status 0
     assert_output_contains "brew install mrtheroi/tap/memry"
-    [ "$(grep -c '12|Secr3tTokenValue' "$OUT")" = 1 ] || fail "the token is not printed exactly once"
+    assert_log_not_contains " token "
+    assert_output_not_contains "Secr3tTokenValue"
+    assert_output_contains "docker compose run --rm app token 'you@example.com'"
     assert_output_contains "memry setup --url http://localhost:8000 --token --agents=codex"
 }
 
@@ -684,6 +687,8 @@ STUB
     run_install --email you@example.com --dir "$DIR"
     assert_status 1
     assert_output_contains "could not install the memry CLI"
+    assert_log_not_contains " token "
+    assert_output_contains "docker compose run --rm app token 'you@example.com'"
     assert_output_contains "store it like a password"
 }
 
@@ -933,7 +938,7 @@ test_quotes_the_directory_in_recovery_commands() {
 
 test_quotes_the_email_in_the_token_recovery_command() {
     STUB_NO_TOKEN=1
-    run_install --email "o'reilly@example.com" --dir "$DIR" --no-cli
+    run_install --email "o'reilly@example.com" --dir "$DIR"
     assert_status 1
     assert_output_contains "docker compose run --rm app token 'o'\\''reilly@example.com'"
 }

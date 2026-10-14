@@ -29,7 +29,7 @@ To run your own server, you need Docker with Compose v2 ([get Docker](https://do
 f=$(mktemp) && curl -fsSLo "$f" https://raw.githubusercontent.com/mrtheroi/memry-server/v0.18.1/install.sh && sh "$f" --email YOUR_EMAIL
 ```
 
-Replace `YOUR_EMAIL` with your email. The script downloads to a new temporary file, so it never overwrites a file in the current directory, and only runs if the download succeeded. To read it first (recommended): `curl -fsSL https://raw.githubusercontent.com/mrtheroi/memry-server/v0.18.1/install.sh | less`. It downloads the release's `docker-compose.yml`, writes a `.env` with a generated `APP_KEY` and database password to `~/memry-community`, starts PostgreSQL and the server, creates your user and token, and runs `memry setup` (installing the memry CLI with Homebrew if needed). Options, the manual setup and the rest of the guide are in [docs/self-hosting.md](docs/self-hosting.md).
+Replace `YOUR_EMAIL` with your email. The script downloads to a new temporary file, so it never overwrites a file in the current directory, and only runs if the download succeeded. To read it first (recommended): `curl -fsSL https://raw.githubusercontent.com/mrtheroi/memry-server/v0.18.1/install.sh | less`. It downloads the release's `docker-compose.yml`, writes a `.env` with a generated `APP_KEY` and database password to `~/memry-community`, starts PostgreSQL and the server, and, once the memry CLI is ready (installed with Homebrew if needed), creates your user and a token and runs `memry setup` with it. Without the CLI it prints no token, only the command to create one. Options, the manual setup and the rest of the guide are in [docs/self-hosting.md](docs/self-hosting.md).
 
 ## License
 

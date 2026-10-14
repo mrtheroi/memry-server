@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **No token printed by `install.sh`** (#31): the installer now creates your user and token only when the memry CLI is ready to use it (`memry setup` reads it from `MEMRY_TOKEN`). With `--no-cli`, without Homebrew, or if the CLI install fails it creates and prints no token; it prints the command to create one on request (`docker compose run --rm app token <email>`) and the `memry setup` command to paste it into. If `memry setup` fails, the token is not printed either; it expires after 30 days of inactivity or can be revoked
 - **Attested releases** (#31): on a release tag the image is pushed with SBOM and max-detail provenance attestations, and the image digest and the installer files (`install.sh`, `docker-compose.yml`, `docker/community.env.example`) get GitHub artifact attestations (SLSA build provenance, Sigstore keyless), verifiable with `gh attestation verify`. See "Verifying releases" in `docs/self-hosting.md`
 
 ### Fixed
