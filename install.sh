@@ -653,9 +653,11 @@ doctor_dir() {
         fi
         project_containers "$project"
         [ -z "$CONTAINERS" ] || container_count=$((container_count + 1))
-        # Only running containers make an install healthy: `docker ps -a` also
-        # lists the ones stopped with `docker compose stop`.
-        running="$(docker ps --filter "label=com.docker.compose.project=${project}" --format '{{.ID}}')" \
+        # Only a running app container makes an install healthy: `docker ps -a`
+        # also lists the ones stopped with `docker compose stop`, and postgres
+        # can run while the app is stopped.
+        running="$(docker ps --filter "label=com.docker.compose.project=${project}" \
+            --filter label=com.docker.compose.service=app --format '{{.ID}}')" \
             || die "could not list the running containers of the project ${project}: docker ps failed."
         [ -z "$running" ] || running_count=$((running_count + 1))
     done
