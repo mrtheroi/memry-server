@@ -5,8 +5,8 @@ namespace App\Memory\Infrastructure\Persistence;
 use App\Memory\Domain\MemoryRepository;
 use App\Memory\Domain\Observation;
 use App\Memory\Domain\ProjectRepository;
-use App\Team\Application\ProvisionPersonalTeam;
 use App\Team\Domain\AccessContext;
+use App\Team\Domain\AccessDenied;
 use Illuminate\Database\Eloquent\Builder;
 
 final class EloquentMemoryRepository implements MemoryRepository
@@ -15,8 +15,7 @@ final class EloquentMemoryRepository implements MemoryRepository
 
     public function save(Observation $observation): Observation
     {
-        // Every row belongs to a team (NOT NULL); a writer that resolved none gets its personal one.
-        $teamId = $observation->teamId ?? app(ProvisionPersonalTeam::class)->forUser($observation->userId);
+        $teamId = $observation->teamId ?? throw AccessDenied::noTeam();
         $record = $observation->id === null
             ? new ObservationRecord
             : $this->withinTeam(ObservationRecord::where('id', $observation->id), $teamId)->firstOrFail();

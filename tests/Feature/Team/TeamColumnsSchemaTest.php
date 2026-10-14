@@ -43,23 +43,19 @@ function observationRow(int $userId, array $extra = []): array
     ];
 }
 
-test('the write path of a user without a team provisions one; only the legacy token keeps team_id NULL', function () {
+test('a user without a team is refused on write; only a legacy token keeps team_id NULL', function () {
     $user = User::factory()->withoutPersonalTeam()->create();
 
     MemoryServer::actingAs($user)->tool(SaveMemory::class, [
         'session_id' => 's', 'type' => 'decision', 'title' => 'T', 'content' => 'C', 'project' => 'p',
-    ])->assertOk();
+    ])->assertHasErrors(['A team is required to write.']);
     MemoryServer::actingAs($user)->tool(SavePrompt::class, [
         'session_id' => 's', 'project' => 'p', 'content' => 'hello',
-    ])->assertOk();
+    ])->assertHasErrors(['A team is required to write.']);
     $token = $user->createToken('t')->accessToken;
 
-    $observation = DB::table('observations')->sole();
-    $prompt = DB::table('user_prompts')->sole();
-    $teamId = schemaTestTeamOf($user->id);
-    expect([$observation->team_id, $prompt->team_id])->each->toBe($teamId)
-        ->and([$observation->project_id, $prompt->project_id])->each->not->toBeNull()
-        ->and([$observation->created_by, $observation->updated_by])->each->toBe($user->id)
+    expect(DB::table('observations')->count())->toBe(0)
+        ->and(DB::table('user_prompts')->count())->toBe(0)
         ->and(DB::table('personal_access_tokens')->where('id', $token->id)->value('team_id'))->toBeNull();
 });
 

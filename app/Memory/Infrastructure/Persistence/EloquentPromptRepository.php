@@ -5,8 +5,8 @@ namespace App\Memory\Infrastructure\Persistence;
 use App\Memory\Domain\ProjectRepository;
 use App\Memory\Domain\PromptRepository;
 use App\Memory\Domain\UserPrompt;
-use App\Team\Application\ProvisionPersonalTeam;
 use App\Team\Domain\AccessContext;
+use App\Team\Domain\AccessDenied;
 
 final class EloquentPromptRepository implements PromptRepository
 {
@@ -14,8 +14,7 @@ final class EloquentPromptRepository implements PromptRepository
 
     public function save(UserPrompt $prompt): void
     {
-        // Every row belongs to a team (NOT NULL); a writer that resolved none gets its personal one.
-        $teamId = $prompt->teamId ?? app(ProvisionPersonalTeam::class)->forUser($prompt->userId);
+        $teamId = $prompt->teamId ?? throw AccessDenied::noTeam();
 
         UserPromptRecord::create([
             'user_id' => $prompt->userId,

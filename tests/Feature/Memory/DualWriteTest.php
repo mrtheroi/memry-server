@@ -105,18 +105,6 @@ test('a null project leaves project_id NULL and creates no project row', functio
         ->and(DB::table('projects')->count())->toBe(0);
 });
 
-test('a user without a team still saves, into a personal team provisioned on the spot, with the same response', function () {
-    $user = User::factory()->withoutPersonalTeam()->create();
-
-    $response = MemoryServer::actingAs($user)->tool(SaveMemory::class, memoryArguments());
-
-    $row = DB::table('observations')->sole();
-    $response->assertExactText("Memory saved with id {$row->id}.");
-    expect($row->team_id)->toBe(personalTeamId($user))
-        ->and($row->project_id)->not->toBeNull()
-        ->and([$row->created_by, $row->updated_by, $row->user_id])->each->toBe($user->id);
-});
-
 test('a legacy NULL-team token resolves to the personal team and dual-writes', function () {
     $user = User::factory()->create();
     $token = $user->createToken('legacy')->plainTextToken;

@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Every memory and prompt belongs to a team.** `observations.team_id` and `user_prompts.team_id` are NOT NULL, applied without blocking writes (a `CHECK ... NOT VALID`, then `VALIDATE`, then `SET NOT NULL`, and the temporary check is dropped; rolling back drops the NOT NULL only). A user without a team no longer writes rows without one: the first save provisions their personal team and writes into it. `personal_access_tokens.team_id` stays nullable on purpose (a token whose user is gone, or a legacy token, resolves through the personal team). `memory:backfill-teams` and its `--check` remain
+- **Every memory and prompt belongs to a team.** `observations.team_id` and `user_prompts.team_id` are NOT NULL, applied without blocking writes (a `CHECK ... NOT VALID`, then `VALIDATE`, then `SET NOT NULL`, and the temporary check is dropped; rolling back drops the NOT NULL only). A write from a context without a team (a user whose team cannot be resolved) is now refused with `A team is required to write.` instead of writing a row without a team, and the memory and prompt repositories throw the same error if handed no team; nothing is provisioned on write. `personal_access_tokens.team_id` stays nullable on purpose (a token whose user is gone, or a legacy token, resolves through the personal team). `memory:backfill-teams` and its `--check` remain
 
 ### Fixed
 

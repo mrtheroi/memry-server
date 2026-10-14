@@ -7,6 +7,7 @@ use App\Memory\Domain\Observation;
 use App\Memory\Infrastructure\Persistence\EloquentMemoryRepository;
 use App\Models\User;
 use App\Team\Domain\AccessContext;
+use App\Team\Domain\AccessDenied;
 use App\Team\Domain\ProjectAccess;
 use App\Team\Domain\Role;
 use App\Team\Infrastructure\Persistence\TeamRecord;
@@ -63,15 +64,15 @@ test('updating a row by id never touches another team', function () {
     expect(DB::table('observations')->sole()->team_id)->toBe($teamA);
 });
 
-test('a denied context never adopts a team row with the same topic_key', function () {
+test('a denied context is refused and never touches a team row with the same topic_key', function () {
     $user = User::factory()->create();
     $teamId = TeamRecord::where('owner_id', $user->id)->value('id');
     $observation = fn (?int $team) => new Observation($user->id, 's', 'decision', 'T', 'C', 'dbmcp', 'project', 'k', teamId: $team);
     $teamRow = (new EloquentMemoryRepository)->save($observation($teamId));
 
-    app(SaveObservation::class)($observation(null), AccessContext::denied($user->id));
+    expect(fn () => app(SaveObservation::class)($observation(null), AccessContext::denied($user->id)))->toThrow(AccessDenied::class);
 
-    expect(DB::table('observations')->count())->toBe(2)
+    expect(DB::table('observations')->count())->toBe(1)
         ->and(DB::table('observations')->where('id', $teamRow->id)->value('team_id'))->toBe($teamId);
 });
 
@@ -81,11 +82,9 @@ test('the repository hydrates the persisted team id on save and find', function 
     $repository = new EloquentMemoryRepository;
 
     $saved = $repository->save(new Observation($user->id, 's', 'decision', 'T', 'C', 'dbmcp', 'project', null, teamId: $teamId));
-    $unteamed = $repository->save(new Observation($user->id, 's', 'decision', 'T', 'C', 'dbmcp', 'project', null));
 
     expect($saved->teamId)->toBe($teamId)
-        ->and($repository->find(contextFor($user), $saved->id)->teamId)->toBe($teamId)
-        ->and($repository->find(AccessContext::system(), $unteamed->id)->teamId)->toBe($teamId);
+        ->and($repository->find(contextFor($user), $saved->id)->teamId)->toBe($teamId);
 });
 
 function sharedTeamWithMember(): array
