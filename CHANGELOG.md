@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`install.sh --doctor` edge cases.** When `docker compose config` fails and the `COMPOSE_PROJECT_NAME` in `.env` is an interpolation expression (for example `${PROJECT_NAME:-memry}`), the doctor now says the name cannot be resolved, makes no volume claim and prints no `docker volume rm`, instead of searching for a literal volume. A `--dir` path with `..` whose parent is missing too (for example `/cwd/foo/../memry`) is now normalized lexically and canonicalized from its longest existing ancestor, so it hashes to the same project as the directory the installer creates
+
 ---
 
 ## [0.19.0] - 2026-10-14

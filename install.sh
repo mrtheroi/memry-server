@@ -172,8 +172,9 @@ canonical_dir() {
 
 # canonical_dir_or_missing <path>: the same absolute path for a directory that
 # may not exist, without creating it. A missing directory is its canonical
-# parent plus its name; with no parent either, the path made absolute with the
-# "." segments removed.
+# parent plus its name; with no parent either, the path made absolute and
+# normalized lexically ("." removed, "segment/.." resolved, never above "/"),
+# with its longest existing ancestor canonicalized like the installer does.
 canonical_dir_or_missing() {
     if [ -d "$1" ]; then canonical_dir "$1"; return; fi
     trimmed="${1%/}"
@@ -184,7 +185,24 @@ canonical_dir_or_missing() {
         return
     fi
     case "$trimmed" in /*) absolute="$trimmed" ;; *) absolute="$(pwd)/${trimmed}" ;; esac
-    printf '%s' "$absolute" | sed -e 's|/\(\./\)\{1,\}|/|g' -e 's|/\.$||' -e 's|//*|/|g'
+    prefix="$(printf '%s' "$absolute" | awk -F/ '{
+        n = 0
+        for (i = 1; i <= NF; i++) {
+            if ($i == "" || $i == ".") continue
+            if ($i == "..") { if (n > 0) n--; continue }
+            seg[++n] = $i
+        }
+        out = ""
+        for (i = 1; i <= n; i++) out = out "/" seg[i]
+        printf "%s", (out == "" ? "/" : out)
+    }')"
+    rest=""
+    while [ ! -d "$prefix" ] && [ "$prefix" != / ]; do
+        rest="/$(basename "$prefix")${rest}"
+        prefix="$(dirname "$prefix")"
+    done
+    prefix="$(canonical_dir "$prefix")"
+    case "$prefix" in /) printf '%s' "$rest" ;; *) printf '%s%s' "$prefix" "$rest" ;; esac
 }
 
 download_files() {
@@ -618,6 +636,7 @@ doctor_dir() {
         || die "could not list the Docker volumes: docker volume ls failed."
     env_file="${DIR}/.env"
     unconfirmed=0
+    unresolved=0
     if [ -f "$env_file" ]; then
         # Compose resolves interpolation and its defaults exactly: ask it, with
         # the installer's isolated environment. The top-level "name:" of the
@@ -625,17 +644,23 @@ doctor_dir() {
         project="$(compose config 2>/dev/null | sed -n 's/^name:[[:space:]]*//p' | head -n 1 | tr -d "\"'")" || project=""
         if [ -z "$project" ]; then
             project="$(env_get COMPOSE_PROJECT_NAME "$env_file")"
+            # An expression cannot be resolved without Compose: claim nothing.
+            case "$project" in *'$'*) unresolved=1 ;; esac
             # Without the key an install uses Compose's default project.
             [ -n "$project" ] || project="$(default_project_name)"
             unconfirmed=1
         fi
         projects="$project"
+        [ "$unresolved" = 0 ] || projects=""
     else
         projects="$(project_name) $(default_project_name)"
     fi
     say "Install directory: ${DIR}"
     if [ -f "$env_file" ]; then say ".env: present"; else say ".env: missing"; fi
-    if [ "$unconfirmed" = 1 ]; then
+    if [ "$unresolved" = 1 ]; then
+        say "project: the name in .env uses variable interpolation and cannot be resolved,"
+        say "because docker compose config failed."
+    elif [ "$unconfirmed" = 1 ]; then
         say "project: ${project} (could not be confirmed with Compose; read from .env)"
     fi
     found_volumes=""
@@ -668,7 +693,10 @@ doctor_dir() {
     done
     say "containers: $([ "$container_count" -gt 0 ] && echo present || echo none)"
     say ""
-    if [ -z "$found_volumes" ]; then
+    if [ "$unresolved" = 1 ]; then
+        say "No volume claim is made for this install. Restore docker-compose.yml from the"
+        say "release and run the doctor again."
+    elif [ -z "$found_volumes" ]; then
         say "No database volume of this install exists (checked: ${checked})."
     elif [ ! -f "$env_file" ]; then
         say "The database volume of this install exists, but ${env_file} is missing, and the"

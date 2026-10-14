@@ -60,6 +60,7 @@ It finds the database volumes of that install with the installer's own rules (th
 - healthy: nothing to do (the `app` container is running);
 - stopped: the data is intact, and no `app` container of the install is running (PostgreSQL may still run, or the containers may exist stopped, for example after `docker compose stop`); start it with `cd <directory> && docker compose up -d`;
 - `.env` missing but the volume exists: restore the old `.env` (it holds `APP_KEY` and `DB_PASSWORD`) and run the installer again, or, only if you do not want the data, `docker volume rm <volume>`, which removes every memory in it and cannot be undone. The delete command is printed only for the volume named after the directory path (with its checksum), which is proven to belong to that directory. A volume named only after the directory name may be this install's, but the same name can belong to another install, so the doctor reports it, offers the restore, and suggests no deletion because ownership cannot be proven;
+- project name not resolvable: when Compose cannot read the install (for example `docker-compose.yml` is gone) and the `COMPOSE_PROJECT_NAME` in `.env` is an expression such as `${PROJECT_NAME:-memry}`, the doctor does not guess. It says the name uses variable interpolation and cannot be resolved, makes no claim about the volume and prints no `docker volume rm`; restore `docker-compose.yml` from the release and run the doctor again;
 - no volume for that install: it says so.
 
 Without `--dir` the doctor only lists, for information:

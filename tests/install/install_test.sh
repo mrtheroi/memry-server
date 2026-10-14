@@ -1217,6 +1217,26 @@ test_doctor_dir_canonicalizes_a_relative_path_to_a_missing_directory_like_the_in
     [ ! -e "${T}/memry" ] || fail "the doctor created the directory"
 }
 
+test_doctor_dir_resolves_a_dotdot_in_a_missing_path_whose_parent_is_missing_too() {
+    here="$(cd "$T" && pwd)"
+    project="memry-$(printf '%s' "${here}/memry" | cksum | cut -d ' ' -f 1)"
+    STUB_VOLUMES="${project}_postgres-data"
+    run_install --doctor --dir "${T}/gone/../memry"
+    assert_status 0
+    assert_output_contains "Install directory: ${here}/memry"
+    assert_output_contains "volume: ${project}_postgres-data"
+}
+
+test_doctor_dir_removes_dot_segments_and_resolves_pairs_in_an_all_missing_path() {
+    here="$(cd "$T" && pwd)"
+    project="memry-$(printf '%s' "${here}/a/memry" | cksum | cut -d ' ' -f 1)"
+    STUB_VOLUMES="${project}_postgres-data"
+    run_install --doctor --dir "${T}/a/./b/../memry"
+    assert_status 0
+    assert_output_contains "Install directory: ${here}/a/memry"
+    assert_output_contains "volume: ${project}_postgres-data"
+}
+
 test_doctor_dir_asks_compose_for_the_project_name_of_an_interpolated_env() {
     mkdir -p "$DIR"
     # shellcheck disable=SC2016 # the ${...} is literal: Compose interpolates it
@@ -1237,6 +1257,20 @@ test_doctor_dir_falls_back_to_the_env_and_says_the_project_name_is_unconfirmed_w
     assert_status 0
     assert_output_contains "volume: myproj-1_postgres-data"
     assert_output_contains "could not be confirmed with Compose"
+}
+
+test_doctor_dir_does_not_search_a_volume_for_an_interpolated_name_when_compose_fails() {
+    mkdir -p "$DIR"
+    # shellcheck disable=SC2016 # the ${...} is literal: it is what .env holds
+    printf 'COMPOSE_PROJECT_NAME=${X:-memry}\nDB_PASSWORD=secret\n' > "${DIR}/.env"
+    STUB_VOLUMES="memry_postgres-data"
+    run_install --doctor --dir "$DIR"
+    assert_status 0
+    assert_output_contains "uses variable interpolation and cannot be resolved"
+    assert_output_contains "Restore docker-compose.yml"
+    assert_output_not_contains "docker volume rm"
+    assert_output_not_contains "volume: "
+    assert_output_not_contains "No database volume"
 }
 
 test_doctor_dir_still_refuses_the_other_install_options() {
