@@ -6,8 +6,10 @@
 #
 # It downloads docker-compose.yml and the example .env of one release into a
 # directory (default ~/memry-community), generates APP_KEY and a database
-# password, starts PostgreSQL and memry, creates your user and token, then
-# runs `memry setup` (installing the memry CLI with Homebrew if needed).
+# password, starts PostgreSQL and memry, then runs `memry setup` with a token
+# created for your user (installing the memry CLI with Homebrew if needed). The
+# token is only created when the CLI is ready to use it, and is never printed:
+# without the CLI the script prints the command to create one on request.
 # Running it again keeps the existing .env: a key or password in use is never
 # regenerated. Run `sh install.sh --help` for the options.
 #
@@ -37,7 +39,7 @@ Options:
   --port PORT        Host port of the server (default: 8000)
   --agents LIST      Agents to connect, comma-separated (e.g. claude-code,codex);
                      without it, memry setup asks
-  --no-cli           Do not install or run the memry CLI; print the token instead
+  --no-cli           Do not install or run the memry CLI; print how to create a token
   -h, --help         Show this help
 
 Requires Docker with Compose v2 (https://docs.docker.com/get-docker/) and curl.
@@ -418,13 +420,14 @@ setup_command() {
     [ -z "$AGENTS" ] || printf ' --agents=%s' "$AGENTS"
 }
 
-# Shown only when the CLI step is skipped or fails.
-print_token() {
+# Shown when the token is not issued here: the user creates it on request.
+print_token_instructions() {
     say ""
-    say "Your memry token (shown once; store it like a password):"
+    say "To create a token when you need one, run:"
     say ""
-    say "    ${TOKEN}"
+    say "    cd ${QDIR} && docker compose run --rm app token $(shell_quote "$EMAIL")"
     say ""
+    say "The token is printed once by that command: store it like a password."
     say "To connect your agents, install the memry CLI ${MIN_CLI_VERSION} or newer, run the"
     say "command below and paste the token when it asks for it:"
     say ""
@@ -515,25 +518,30 @@ main() {
     download_files
     configure_env
     start_server
-    issue_token
     cli_status=0
     if [ "$INSTALL_CLI" = 1 ]; then
         ensure_cli || cli_status=$?
     fi
     if [ "$INSTALL_CLI" = 0 ] || [ "$cli_status" = 2 ]; then
-        print_token
+        print_token_instructions
     elif [ "$cli_status" != 0 ]; then
         not_connected "could not install the memry CLI ${MIN_CLI_VERSION}+"
-    elif ! connect_agents; then
-        not_connected "memry setup failed"
+    else
+        # The CLI is ready: the token is issued now because it is consumed now.
+        issue_token
+        connect_agents || { TOKEN=""; not_connected "memry setup failed" "the token it created was not used"; }
+        TOKEN=""
     fi
     print_summary
 }
 
-# not_connected <reason>: the server runs but the agents are not connected.
+# not_connected <reason> [<note>]: the server runs but the agents are not
+# connected. The note says the token this run created was not used: it is
+# never printed, it expires after 30 days of inactivity or can be revoked.
 not_connected() {
     printf '\nmemry install: %s; the server is running, but your agents are not connected yet.\n' "$1" >&2
-    print_token
+    [ -z "${2:-}" ] || printf 'The unused token expires after 30 days of inactivity (or revoke it from memry).\n' >&2
+    print_token_instructions
     print_summary
     exit 1
 }

@@ -26,10 +26,10 @@ Replace `YOUR_EMAIL` with your email. The command downloads the script to a new 
 3. writes `.env` (mode 600) with a generated `APP_KEY`, a random `DB_PASSWORD`, `APP_URL`, `APP_PORT` and `MEMRY_IMAGE`;
 4. pulls the images (`docker pull` in your environment, so credential helpers work for a private `MEMRY_IMAGE`), runs migrations, starts `app` and `scheduler` and waits for `/up`;
    Compose then runs the app image by its digest (`repo@sha256:...`, set by the script, whatever your shell exports), so it runs exactly the image the script pulled and never re-pulls a `:latest` or untagged one without your registry credentials; a locally built image without a digest is tagged `memry-server:pinned-<12 hex chars of its image ID>` and run by that tag; `.env` is not changed;
-5. creates your user and a token (kept in memory, never written to disk);
-6. installs the [memry CLI](https://github.com/mrtheroi/memry-cli) with Homebrew if it is missing or older than 0.7.0, and runs `memry setup --url http://localhost:<port> --token`, which reads the token from `MEMRY_TOKEN`.
+5. installs the [memry CLI](https://github.com/mrtheroi/memry-cli) with Homebrew if it is missing or older than 0.7.0;
+6. once the CLI is ready, creates your user and a token (kept in memory, never written to disk or printed) and runs `memry setup --url http://localhost:<port> --token`, which reads the token from `MEMRY_TOKEN`.
 
-Without Homebrew, with `--no-cli`, or if setup fails, the script prints the token once, with the `memry setup` command to run yourself. Store the token like a password.
+Without Homebrew, with `--no-cli`, or if the CLI install fails, the script creates no token and prints none: it shows the command to create one when you need it (`cd <dir> && docker compose run --rm app token <email>`, which prints the token once and also creates your user) and the `memry setup` command to paste it into. Store the token like a password. If `memry setup` fails after the token was created, the token is not printed; it expires after 30 days of inactivity, or you can revoke it with `memory:revoke`.
 
 | Option | Default | |
 | --- | --- | --- |
@@ -37,7 +37,7 @@ Without Homebrew, with `--no-cli`, or if setup fails, the script prints the toke
 | `--dir` | `~/memry-community` | Install directory |
 | `--port` | `8000` | Host port; `APP_URL` is `http://localhost:<port>` |
 | `--agents` | asked by `memry setup` | Agents to connect, e.g. `claude-code,codex` |
-| `--no-cli` | | Skip the memry CLI and print the token |
+| `--no-cli` | | Skip the memry CLI; the token is not created, the script prints how to create one |
 
 The script only installs on the local Docker daemon. It refuses to run against a remote one (`DOCKER_CONTEXT`, `DOCKER_HOST` or the active `docker context` pointing to `tcp://` somewhere other than localhost, or to `ssh://`; `DOCKER_CONTEXT` wins over `DOCKER_HOST`, as in the docker CLI), because memry would start on that machine while the script looked for it on `localhost`. To deploy on a server, follow [Manual setup](#manual-setup) and [Reverse proxy and TLS](#reverse-proxy-and-tls). Docker Compose runs with a minimal environment (`PATH`, `HOME`, `DOCKER_*`, locale, ssh agent), so variables exported in your shell, including ones referenced inside `.env` values, never change what it starts.
 
@@ -45,7 +45,7 @@ A new `.env` also gets `COMPOSE_PROJECT_NAME`: the directory name plus a checksu
 
 If `.env` is missing but a database volume of that directory still exists (`<project>_postgres-data`, or `<directory>_postgres-data` from an install without `COMPOSE_PROJECT_NAME`), the script stops instead of generating a new `DB_PASSWORD` the database would reject. Restore the old `.env` (back it up: it holds `APP_KEY` and `DB_PASSWORD`), or delete the volume and all its data with `docker volume rm <project>_postgres-data`, then run the script again. If the volume belongs to another installation in a directory with the same name, install into a directory with another name.
 
-Running the script again is safe: an existing `.env` is kept (only empty required values are filled in), so `APP_KEY` and `DB_PASSWORD` never change. Each run issues a new token; revoke old ones with `memory:revoke` (see [Users and tokens](#users-and-tokens)). To upgrade later, follow [Upgrades](#upgrades). Put a TLS proxy in front before exposing the server beyond your machine ([Reverse proxy and TLS](#reverse-proxy-and-tls)).
+Running the script again is safe: an existing `.env` is kept (only empty required values are filled in), so `APP_KEY` and `DB_PASSWORD` never change. Each run that connects your agents issues a new token; revoke old ones with `memory:revoke` (see [Users and tokens](#users-and-tokens)). To upgrade later, follow [Upgrades](#upgrades). Put a TLS proxy in front before exposing the server beyond your machine ([Reverse proxy and TLS](#reverse-proxy-and-tls)).
 
 ### Manual setup
 
