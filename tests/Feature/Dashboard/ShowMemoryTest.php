@@ -67,3 +67,15 @@ test('an id beyond the integer range is a 404, not a server error', function () 
 
     readAs(bearerOf($ada), '/api/memories/99999999999999999999')->assertNotFound();
 });
+
+test('a user without a team reads nothing: empty collections and a 404 for any id', function () {
+    $owner = User::factory()->create();
+    $memory = remember($owner, 'Sanctum', 'sanctum');
+    $teamless = User::factory()->withoutPersonalTeam()->create();
+    $headers = ['Authorization' => 'Bearer '.$teamless->createToken('cli')->plainTextToken];
+
+    expect(readAs($headers, '/api/projects')->assertOk()->json('data'))->toBe([])
+        ->and(readAs($headers, '/api/memories')->assertOk()->json('data'))->toBe([])
+        ->and(readAs($headers, '/api/memories/search?q=sanctum')->assertOk()->json('data'))->toBe([]);
+    readAs($headers, "/api/memories/{$memory->id}")->assertNotFound();
+});
