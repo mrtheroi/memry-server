@@ -29,7 +29,11 @@ Replace `YOUR_EMAIL` with your email. The command downloads the script to a new 
 5. installs the [memry CLI](https://github.com/mrtheroi/memry-cli) with Homebrew if it is missing or older than 0.7.0;
 6. once the CLI is ready, creates your user and a token (kept in memory, never written to disk or printed) and runs `memry setup --url http://localhost:<port> --token`, which reads the token from `MEMRY_TOKEN`.
 
-Without Homebrew, with `--no-cli`, or if the CLI install fails, the script creates no token and prints none: it shows the command to create one when you need it (`cd <dir> && docker compose run --rm app token <email>`, which prints the token once and also creates your user) and the `memry setup` command to paste it into. Store the token like a password. If `memry setup` fails after the token was created, the token is not printed; it expires after 30 days of inactivity, or you can revoke it with `memory:revoke`.
+Without Homebrew, with `--no-cli`, or if the CLI install fails, the script creates no token and prints none: it shows the command to create one when you need it (`cd <dir> && ./compose run --rm app token <email>`, which prints the token once and also creates your user) and the `memry setup` command to paste it into. Store the token like a password. If `memry setup` fails after the token was created, the token is not printed; it expires after 30 days of inactivity, or you can revoke it with `memory:revoke`.
+
+### The `./compose` helper
+
+The installer writes `./compose` in the install directory (mode 0755, overwritten on every run). It runs `docker compose` for that install only, with the same minimal environment as the installer (`env -i` plus the variables the docker CLI needs) and with `--project-directory` and `--env-file` pointing at its own directory, so variables exported in your shell (`COMPOSE_PROJECT_NAME`, `MEMRY_IMAGE`, `DB_PASSWORD`, ...) cannot send a command to another project, database or image. Use it in place of `docker compose` for an install made by `install.sh`: `cd <dir> && ./compose logs app`. The commands below that start with `./compose` are for such an install; with a manual or source setup there is no helper, so use `docker compose` there.
 
 | Option | Default | |
 | --- | --- | --- |
@@ -41,7 +45,7 @@ Without Homebrew, with `--no-cli`, or if the CLI install fails, the script creat
 
 The script only installs on the local Docker daemon. It refuses to run against a remote one (`DOCKER_CONTEXT`, `DOCKER_HOST` or the active `docker context` pointing to `tcp://` somewhere other than localhost, or to `ssh://`; `DOCKER_CONTEXT` wins over `DOCKER_HOST`, as in the docker CLI), because memry would start on that machine while the script looked for it on `localhost`. To deploy on a server, follow [Manual setup](#manual-setup) and [Reverse proxy and TLS](#reverse-proxy-and-tls). Docker Compose runs with a minimal environment (`PATH`, `HOME`, `DOCKER_*`, locale, ssh agent), so variables exported in your shell, including ones referenced inside `.env` values, never change what it starts.
 
-A new `.env` also gets `COMPOSE_PROJECT_NAME`: the directory name plus a checksum of its absolute path (for example `memry-community-1234567890`), so two installs in directories with the same name never share containers or the database volume (`<project>_postgres-data`). It stays the same on every run, and plain `docker compose` commands in the directory use it too. An existing `.env` without it keeps Compose's default project, the directory name, so its volume is not orphaned.
+A new `.env` also gets `COMPOSE_PROJECT_NAME`: the directory name plus a checksum of its absolute path (for example `memry-community-1234567890`), so two installs in directories with the same name never share containers or the database volume (`<project>_postgres-data`). It stays the same on every run, and `./compose` (below) and plain `docker compose` commands in the directory use it too. An existing `.env` without it keeps Compose's default project, the directory name, so its volume is not orphaned.
 
 If `.env` is missing but a database volume of that directory still exists (`<project>_postgres-data`, or `<directory>_postgres-data` from an install without `COMPOSE_PROJECT_NAME`), the script stops instead of generating a new `DB_PASSWORD` the database would reject. Restore the old `.env` (back it up: it holds `APP_KEY` and `DB_PASSWORD`), or delete the volume and all its data with `docker volume rm <project>_postgres-data`, then run the script again. If the volume belongs to another installation in a directory with the same name, install into a directory with another name.
 
@@ -114,11 +118,11 @@ Services in `docker-compose.yml`:
 | `migrate` | One-off: runs migrations and exits |
 | `postgres` | PostgreSQL 16 with the `postgres-data` volume |
 
-The container runs as a non-root user and logs to stderr (`docker compose logs app`).
+The container runs as a non-root user and logs to stderr (`./compose logs app`; with a manual setup, `docker compose logs app`).
 
 ### Entrypoint commands
 
-The image entrypoint accepts these commands (`docker compose run --rm app <command>`):
+The image entrypoint accepts these commands (`./compose run --rm app <command>`, or `docker compose run --rm app <command>` with a manual setup):
 
 | Command | Effect |
 | --- | --- |
@@ -143,7 +147,7 @@ Migrations need a direct PostgreSQL connection or a session-pooled one. Transact
 Run migrations after the first install and after every upgrade:
 
 ```bash
-docker compose run --rm migrate
+./compose run --rm migrate
 ```
 
 Alternatively set `AUTO_MIGRATE=true` so `app` migrates before it starts serving. Migrations run under a PostgreSQL advisory lock (`php artisan memory:migrate`): containers starting at once wait for the first one to finish and then find nothing left to migrate, including on a brand-new database.
@@ -153,8 +157,8 @@ Alternatively set `AUTO_MIGRATE=true` so `app` migrates before it starts serving
 There is no sign-up page. Create a user and token from the server:
 
 ```bash
-docker compose run --rm app token you@example.com     # prints "Token: ..." once
-docker compose run --rm app memory:revoke you@example.com
+./compose run --rm app token you@example.com     # prints "Token: ..." once
+./compose run --rm app memory:revoke you@example.com
 ```
 
 Tokens are shown once; store them like passwords.
@@ -200,15 +204,15 @@ Agents send bearer tokens on every request, so do not expose the server over pla
 
 ## Upgrades
 
-Read the [CHANGELOG](../CHANGELOG.md) first, then run migrations after updating the image. Upgrading from a release before teams, the migration also creates a personal team for every user and assigns it to their existing memories, prompts and tokens; no separate step is needed. When upgrading from a release before teams, stop the app (`docker compose stop app scheduler`) before running the migration, so the old version does not keep writing while it runs. The new `app` container also runs `php artisan memory:backfill-teams` on start, before it serves requests, so any rows the old app wrote during the upgrade still get their team. To verify, run `docker compose run --rm app memory:backfill-teams --check`: it exits 0 when nothing is missing.
+Read the [CHANGELOG](../CHANGELOG.md) first, then run migrations after updating the image. Upgrading from a release before teams, the migration also creates a personal team for every user and assigns it to their existing memories, prompts and tokens; no separate step is needed. When upgrading from a release before teams, stop the app (`./compose stop app scheduler`) before running the migration, so the old version does not keep writing while it runs. The new `app` container also runs `php artisan memory:backfill-teams` on start, before it serves requests, so any rows the old app wrote during the upgrade still get their team. To verify, run `./compose run --rm app memory:backfill-teams --check`: it exits 0 when nothing is missing.
 
 With the published image, set `MEMRY_IMAGE` in `.env` to the new release and pull it. Download that release's `docker-compose.yml` and `community.env.example` again and compare them with your copies, since new settings can appear:
 
 ```bash
 # edit .env: MEMRY_IMAGE=ghcr.io/mrtheroi/memry-server:<new-version>
-docker compose pull app
-docker compose run --rm migrate
-docker compose up -d app scheduler
+./compose pull app
+./compose run --rm migrate
+./compose up -d app scheduler
 ```
 
 From a source checkout:
@@ -225,9 +229,9 @@ docker compose up -d app scheduler
 All state lives in PostgreSQL:
 
 ```bash
-docker compose exec -T postgres pg_dump -U memry -Fc memry > memry-$(date +%F).dump
+./compose exec -T postgres pg_dump -U memry -Fc memry > memry-$(date +%F).dump
 # restore into an empty database:
-docker compose exec -T postgres pg_restore -U memry -d memry --clean --if-exists < memry-2026-01-01.dump
+./compose exec -T postgres pg_restore -U memry -d memry --clean --if-exists < memry-2026-01-01.dump
 ```
 
 Keep `APP_KEY` stable across restores and upgrades: login codes are signed with it (tokens are not).

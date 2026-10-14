@@ -557,7 +557,7 @@ test_fails_with_a_hint_when_the_server_never_comes_up() {
     run_install --email you@example.com --dir "$DIR" --no-cli
     assert_status 1
     assert_output_contains "did not answer http://localhost:8000/up"
-    assert_output_contains "docker compose logs app"
+    assert_output_contains "./compose logs app"
     assert_log_not_contains " token "
 }
 
@@ -580,7 +580,7 @@ test_no_cli_issues_no_token_and_prints_the_on_request_command() {
     assert_status 0
     assert_log_not_contains " token "
     assert_output_not_contains "Secr3tTokenValue"
-    assert_output_contains "cd ${DIR} && docker compose run --rm app token 'you@example.com'"
+    assert_output_contains "cd ${DIR} && ./compose run --rm app token 'you@example.com'"
     assert_output_contains "store it like a password"
     assert_output_contains "memry setup --url http://localhost:8000 --token"
 }
@@ -604,7 +604,7 @@ test_does_not_print_the_token_when_memry_setup_fails() {
     assert_output_contains "memry setup failed"
     assert_output_not_contains "Secr3tTokenValue"
     assert_output_contains "expires after 30 days"
-    assert_output_contains "docker compose run --rm app token 'you@example.com'"
+    assert_output_contains "./compose run --rm app token 'you@example.com'"
     assert_output_contains "memry setup --url http://localhost:8000 --token"
 }
 
@@ -629,7 +629,7 @@ test_without_brew_prints_instructions_and_issues_no_token() {
     assert_output_contains "brew install mrtheroi/tap/memry"
     assert_log_not_contains " token "
     assert_output_not_contains "Secr3tTokenValue"
-    assert_output_contains "docker compose run --rm app token 'you@example.com'"
+    assert_output_contains "./compose run --rm app token 'you@example.com'"
     assert_output_contains "memry setup --url http://localhost:8000 --token --agents=codex"
 }
 
@@ -661,9 +661,9 @@ test_finishes_with_a_summary() {
     assert_status 0
     assert_output_contains "memry is running at http://localhost:8000"
     assert_output_contains "cd ${DIR}"
-    assert_output_contains "docker compose stop"
-    assert_output_contains "docker compose up -d app scheduler"
-    assert_output_contains "docker compose run --rm migrate"
+    assert_output_contains "./compose stop"
+    assert_output_contains "./compose up -d app scheduler"
+    assert_output_contains "./compose run --rm migrate"
     assert_output_contains "https://github.com/mrtheroi/memry-server/blob/v0.18.1/docs/self-hosting.md"
 }
 
@@ -688,7 +688,7 @@ STUB
     assert_status 1
     assert_output_contains "could not install the memry CLI"
     assert_log_not_contains " token "
-    assert_output_contains "docker compose run --rm app token 'you@example.com'"
+    assert_output_contains "./compose run --rm app token 'you@example.com'"
     assert_output_contains "store it like a password"
 }
 
@@ -933,14 +933,14 @@ test_quotes_the_directory_in_recovery_commands() {
     STUB_UP_STATUS=000 MEMRY_UP_TIMEOUT_OVERRIDE=4
     run_install --email you@example.com --dir "$DIR" --no-cli
     assert_status 1
-    assert_output_contains "cd '${DIR}' && docker compose logs app"
+    assert_output_contains "cd '${DIR}' && ./compose logs app"
 }
 
 test_quotes_the_email_in_the_token_recovery_command() {
     STUB_NO_TOKEN=1
     run_install --email "o'reilly@example.com" --dir "$DIR"
     assert_status 1
-    assert_output_contains "docker compose run --rm app token 'o'\\''reilly@example.com'"
+    assert_output_contains "./compose run --rm app token 'o'\\''reilly@example.com'"
 }
 
 test_the_local_readiness_probe_ignores_proxy_variables() {
@@ -949,6 +949,25 @@ test_the_local_readiness_probe_ignores_proxy_variables() {
     assert_status 0
     assert_log_contains "--noproxy * "
     assert_log_contains "http://localhost:8000/up"
+}
+
+test_writes_an_executable_compose_helper_in_the_install_directory() {
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    [ -x "${DIR}/compose" ] || fail "${DIR}/compose is missing or not executable"
+}
+
+test_the_compose_helper_isolates_compose_from_the_callers_environment() {
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    : > "$STUB_LOG"
+    (cd "$T" && env COMPOSE_PROJECT_NAME=evil MEMRY_IMAGE=evil:1 DOCKER_CONTEXT=mine \
+        PATH="${STUBS}:${SYSBIN}" HOME="$T" "${DIR}/compose" ps)
+    assert_log_contains "compose flags: --project-directory ${DIR} --env-file ${DIR}/.env"
+    assert_log_contains "COMPOSE_PROJECT_NAME=unset"
+    assert_log_contains "MEMRY_IMAGE=unset"
+    assert_log_contains "DOCKER_CONTEXT=mine"
+    assert_log_contains "docker compose ps"
 }
 
 # --- run --------------------------------------------------------------------

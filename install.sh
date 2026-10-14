@@ -296,10 +296,45 @@ compose() {
 
 # The variables docker needs: working directory (set by the script), executable lookup, config and credential helper
 # location, locale and terminal, ssh agent for ssh:// endpoints, DOCKER_*
-# (host, context, TLS, config) and XDG_* (config directories).
+# (host, context, TLS, config) and XDG_* (config directories). One regex: the
+# compose() function and the generated ./compose helper both use it.
+COMPOSE_ALLOW_REGEX='^(PATH|HOME|PWD|USER|LOGNAME|TMPDIR|TERM|LANG|LC_[A-Z_]+|SSH_AUTH_SOCK|DOCKER_[A-Za-z0-9_]+|XDG_[A-Za-z0-9_]+)$'
+
 compose_passthrough_names() {
     env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' \
-        | grep -E '^(PATH|HOME|PWD|USER|LOGNAME|TMPDIR|TERM|LANG|LC_[A-Z_]+|SSH_AUTH_SOCK|DOCKER_[A-Za-z0-9_]+|XDG_[A-Za-z0-9_]+)$' || true
+        | grep -E "$COMPOSE_ALLOW_REGEX" || true
+}
+
+# write_compose_helper: ${DIR}/compose, the entry point for every Compose
+# command printed for the user. It runs `docker compose` with the same
+# isolation as compose() above (env -i plus the same allow-list), so variables
+# exported in the user's shell cannot redirect it to another project, database
+# or image. The project directory is resolved from the helper's own location at
+# run time, so the install directory can be moved. MEMRY_IMAGE comes from
+# .env, which already names the pulled image. Owned by the installer: it is
+# overwritten on every run.
+write_compose_helper() {
+    {
+        cat <<'HEAD'
+#!/bin/sh
+# Written by the memry installer; overwritten on every install.
+# Runs `docker compose` for this install only, ignoring Compose variables
+# exported in your shell (COMPOSE_PROJECT_NAME, MEMRY_IMAGE, DB_PASSWORD, ...).
+# Usage: ./compose <docker compose arguments>, e.g. ./compose logs app
+dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)" || exit 1
+set -- docker compose --project-directory "$dir" --env-file "${dir}/.env" "$@"
+value=''
+HEAD
+        printf "allow='%s'\n" "$COMPOSE_ALLOW_REGEX"
+        cat <<'TAIL'
+for name in $(env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' | grep -E "$allow"); do
+    eval "value=\${$name}"
+    set -- "$name=$value" "$@"
+done
+exec env -i "$@"
+TAIL
+    } > "${DIR}/compose"
+    chmod 0755 "${DIR}/compose"
 }
 
 # pin_app_image <image>: sets PINNED_IMAGE to the digest reference of the
@@ -353,10 +388,10 @@ start_server() {
     # No --pull flag: the app image is pinned by digest and local by now, so
     # Compose never pulls it. `run --pull` only exists since Compose v2.32.2,
     # so passing it would break older Compose v2 installs.
-    compose run --rm migrate || die "migrations failed. See the output above, or run: cd ${QDIR} && docker compose logs postgres"
+    compose run --rm migrate || die "migrations failed. See the output above, or run: cd ${QDIR} && ./compose logs postgres"
 
     step "Starting memry"
-    compose up -d app scheduler || die "could not start memry. Run: cd ${QDIR} && docker compose logs app"
+    compose up -d app scheduler || die "could not start memry. Run: cd ${QDIR} && ./compose logs app"
     wait_until_up
 }
 
@@ -396,7 +431,7 @@ wait_until_up() {
         sleep 2
     done
     say ""
-    die "memry did not answer ${URL}/up within ${timeout}s. Check the logs with: cd ${QDIR} && docker compose logs app"
+    die "memry did not answer ${URL}/up within ${timeout}s. Check the logs with: cd ${QDIR} && ./compose logs app"
 }
 
 # parse_token: reads the entrypoint's `token <email>` output ("Token: <token>").
@@ -408,10 +443,10 @@ parse_token() {
 issue_token() {
     step "Creating a token for ${EMAIL}"
     token_output="$(compose run --rm -T app token "$EMAIL")" \
-        || die "could not create the user and token. Check the logs with: cd ${QDIR} && docker compose logs app"
+        || die "could not create the user and token. Check the logs with: cd ${QDIR} && ./compose logs app"
     TOKEN="$(printf '%s\n' "$token_output" | parse_token)"
     token_output=""
-    [ -n "$TOKEN" ] || die "the server did not print a token. Run it by hand: cd ${QDIR} && docker compose run --rm app token $(shell_quote "$EMAIL")"
+    [ -n "$TOKEN" ] || die "the server did not print a token. Run it by hand: cd ${QDIR} && ./compose run --rm app token $(shell_quote "$EMAIL")"
     say "Token created."
 }
 
@@ -425,7 +460,7 @@ print_token_instructions() {
     say ""
     say "To create a token when you need one, run:"
     say ""
-    say "    cd ${QDIR} && docker compose run --rm app token $(shell_quote "$EMAIL")"
+    say "    cd ${QDIR} && ./compose run --rm app token $(shell_quote "$EMAIL")"
     say ""
     say "The token is printed once by that command: store it like a password."
     say "To connect your agents, install the memry CLI ${MIN_CLI_VERSION} or newer, run the"
@@ -496,17 +531,19 @@ memry is running at ${URL}
 
 Directory: ${DIR}
 .env there holds your APP_KEY and database password: keep it private and back
-it up. Manage the server from that directory (cd ${QDIR}):
+it up. Manage the server from that directory (cd ${QDIR}) with ./compose, a
+helper the installer wrote: it runs docker compose for this install only and
+ignores Compose variables exported in your shell.
 
-    docker compose stop                       # stop
-    docker compose up -d app scheduler        # start
-    docker compose logs app                   # logs
+    ./compose stop                  # stop
+    ./compose up -d app scheduler   # start
+    ./compose logs app              # logs
 
 Upgrade: set MEMRY_IMAGE in .env to the new release
 (ghcr.io/mrtheroi/memry-server:<version>), then run
-    docker compose pull app
-    docker compose run --rm migrate
-    docker compose up -d app scheduler
+    ./compose pull app
+    ./compose run --rm migrate
+    ./compose up -d app scheduler
 
 Docs: ${SELF_HOSTING_DOCS}
 SUMMARY
@@ -517,6 +554,7 @@ main() {
     preflight
     download_files
     configure_env
+    write_compose_helper
     start_server
     cli_status=0
     if [ "$INSTALL_CLI" = 1 ]; then

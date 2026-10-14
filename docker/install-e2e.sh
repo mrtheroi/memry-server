@@ -63,9 +63,9 @@ install() {
         fail "install.sh exited with an error"
     fi
     cat "$out"
-    grep -q "docker compose run --rm app token 'e2e@example.com'" "$out" \
+    grep -q "./compose run --rm app token 'e2e@example.com'" "$out" \
         || fail "install.sh did not print the command to create a token"
-    token="$(cd "$install_dir" && docker compose run --rm -T app token e2e@example.com \
+    token="$(cd "$install_dir" && ./compose run --rm -T app token e2e@example.com \
         | tr -d '\r' | sed -n 's/^Token: //p' | tail -n 1)"
     [ -n "$token" ] || fail "the token command printed no token"
 }
