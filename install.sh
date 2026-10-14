@@ -539,9 +539,8 @@ ignores Compose variables exported in your shell.
     ./compose up -d app scheduler   # start
     ./compose logs app              # logs
 
-Upgrade: set MEMRY_IMAGE in .env to the new release
-(ghcr.io/mrtheroi/memry-server:<version>), then run
-    ./compose pull app
+Upgrade: set MEMRY_IMAGE in .env to the new release, then run
+    docker pull ghcr.io/mrtheroi/memry-server:<version>
     ./compose run --rm migrate
     ./compose up -d app scheduler
 

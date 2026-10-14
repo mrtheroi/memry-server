@@ -585,6 +585,13 @@ test_no_cli_issues_no_token_and_prints_the_on_request_command() {
     assert_output_contains "memry setup --url http://localhost:8000 --token"
 }
 
+test_upgrade_instructions_pull_in_the_callers_environment() {
+    run_install --email you@example.com --dir "$DIR" --no-cli
+    assert_status 0
+    assert_output_contains "docker pull ghcr.io/mrtheroi/memry-server:<version>"
+    assert_output_not_contains "./compose pull"
+}
+
 test_connects_agents_with_the_token_in_the_environment() {
     STUB_TOKEN='12|Secr3tTokenValue'
     run_install --email you@example.com --dir "$DIR" --agents claude-code,codex
