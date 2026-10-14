@@ -98,6 +98,22 @@ case "$*" in
             *) cat "${STUB_LOG}.context.${3}" 2>/dev/null || exit 1 ;;
         esac
         ;;
+    "volume ls "*)
+        # The volumes that exist: STUB_VOLUMES, space separated.
+        for volume in ${STUB_VOLUMES:-}; do echo "$volume"; done
+        ;;
+    "volume inspect --format"*)
+        # The Compose project label of a volume: its name without the volume key.
+        echo "${5%_postgres-data}"
+        ;;
+    "ps -a --filter"*)
+        # One line (dir=<working_dir label>) per container of the project asked
+        # for in the filter. STUB_CONTAINERS: project=directory, space separated.
+        project="${4#label=com.docker.compose.project=}"
+        for entry in ${STUB_CONTAINERS:-}; do
+            [ "${entry%%=*}" = "$project" ] && echo "dir=${entry#*=}"
+        done
+        ;;
     "volume inspect"*)
         [ "${3:-}" = "${STUB_EXISTING_VOLUME:-}" ] && exit 0
         exit "${STUB_VOLUME_STATUS:-1}"
@@ -192,7 +208,8 @@ setup_test() {
     unset STUB_DAEMON_STATUS STUB_COMPOSE_VERSION STUB_COMPOSE_STATUS STUB_PULL_STATUS \
         STUB_IMAGE_STATUS STUB_TOKEN STUB_UP_STATUS STUB_MEMRY_VERSION STUB_SETUP_STATUS \
         STUB_CURL_FAIL STUB_VOLUME_STATUS STUB_EXISTING_VOLUME STUB_CLOCK_STEP STUB_PUBLISHED_PORT \
-        STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_NO_TOKEN STUB_CONTEXT_HOST STUB_REPO_DIGESTS STUB_IMAGE_ID STUB_TAG_STATUS
+        STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_NO_TOKEN STUB_CONTEXT_HOST STUB_REPO_DIGESTS STUB_IMAGE_ID STUB_TAG_STATUS \
+        STUB_VOLUMES STUB_CONTAINERS
     stub_docker
     stub_curl
     stub_memry
@@ -206,7 +223,7 @@ run_install() {
     stub_value=""
     for stub_var in STUB_LOG STUB_SOURCE STUB_DAEMON_STATUS STUB_COMPOSE_VERSION STUB_COMPOSE_STATUS \
         STUB_PULL_STATUS STUB_IMAGE_STATUS STUB_TOKEN STUB_NO_TOKEN STUB_VOLUME_STATUS \
-        STUB_EXISTING_VOLUME STUB_PUBLISHED_PORT STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_CONTEXT_HOST STUB_REPO_DIGESTS STUB_IMAGE_ID STUB_TAG_STATUS; do
+        STUB_EXISTING_VOLUME STUB_PUBLISHED_PORT STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_CONTEXT_HOST STUB_REPO_DIGESTS STUB_IMAGE_ID STUB_TAG_STATUS STUB_VOLUMES STUB_CONTAINERS; do
         eval "stub_value=\${$stub_var-}"
         printf "%s='%s'; export %s\n" "$stub_var" "$stub_value" "$stub_var"
     done > "${STUBS}/docker.env"
@@ -232,6 +249,8 @@ run_install() {
         ${STUB_REPO_DIGESTS:+STUB_REPO_DIGESTS="$STUB_REPO_DIGESTS"} \
         ${STUB_IMAGE_ID:+STUB_IMAGE_ID="$STUB_IMAGE_ID"} \
         ${STUB_TAG_STATUS:+STUB_TAG_STATUS="$STUB_TAG_STATUS"} \
+        ${STUB_VOLUMES:+STUB_VOLUMES="$STUB_VOLUMES"} \
+        ${STUB_CONTAINERS:+STUB_CONTAINERS="$STUB_CONTAINERS"} \
         ${STUB_CONTEXT_HOST:+STUB_CONTEXT_HOST="$STUB_CONTEXT_HOST"} \
         ${STUB_CLOCK_STEP:+STUB_CLOCK_STEP="$STUB_CLOCK_STEP"} \
         ${MEMRY_VERSION_OVERRIDE:+MEMRY_VERSION="$MEMRY_VERSION_OVERRIDE"} \
@@ -949,6 +968,75 @@ test_the_local_readiness_probe_ignores_proxy_variables() {
     assert_status 0
     assert_log_contains "--noproxy * "
     assert_log_contains "http://localhost:8000/up"
+}
+
+test_doctor_reports_when_there_are_no_memry_volumes() {
+    run_install --doctor
+    assert_status 0
+    assert_output_contains "No memry database volumes found."
+    assert_log_not_contains "compose up"
+    assert_log_not_contains "docker pull"
+    assert_log_not_contains "compose run"
+}
+
+test_doctor_lists_a_volume_in_use_with_its_install_directory() {
+    mkdir -p "${T}/work"
+    STUB_VOLUMES="memry-abc_postgres-data" STUB_CONTAINERS="memry-abc=${T}/work"
+    run_install --doctor
+    assert_status 0
+    assert_output_contains "memry-abc_postgres-data"
+    assert_output_contains "project: memry-abc"
+    assert_output_contains "install: ${T}/work"
+    assert_output_contains "status: in use"
+}
+
+test_doctor_lists_a_volume_without_containers_as_orphaned_with_a_delete_hint() {
+    STUB_VOLUMES="old-1234_postgres-data"
+    run_install --doctor
+    assert_status 0
+    assert_output_contains "old-1234_postgres-data"
+    assert_output_contains "install: unknown"
+    assert_output_contains "status: orphaned"
+    assert_output_not_contains "status: in use"
+    assert_output_contains "docker volume inspect old-1234_postgres-data"
+    assert_output_contains "docker volume rm old-1234_postgres-data"
+    assert_output_contains "removes every memory in it"
+}
+
+test_doctor_flags_a_volume_whose_install_directory_is_gone() {
+    STUB_VOLUMES="gone-9_postgres-data" STUB_CONTAINERS="gone-9=${T}/deleted"
+    run_install --doctor
+    assert_status 0
+    assert_output_contains "install: ${T}/deleted"
+    assert_output_contains "status: directory missing"
+    assert_output_not_contains "status: in use"
+}
+
+test_doctor_never_removes_a_volume() {
+    STUB_VOLUMES="old-1234_postgres-data gone-9_postgres-data" STUB_CONTAINERS="gone-9=${T}/deleted"
+    run_install --doctor
+    assert_status 0
+    assert_log_not_contains "volume rm"
+    assert_log_not_contains "compose down"
+}
+
+test_doctor_cannot_be_combined_with_install_options() {
+    run_install --doctor --email you@example.com
+    assert_status 2
+    assert_output_contains "--doctor cannot be combined with --email"
+    assert_log_not_contains "docker"
+}
+
+test_help_documents_doctor() {
+    run_install --help
+    assert_status 0
+    assert_output_contains "--doctor"
+}
+
+test_doctor_needs_neither_curl_nor_an_email() {
+    rm -f "${STUBS}/curl"
+    run_install --doctor
+    assert_status 0
 }
 
 # --- run --------------------------------------------------------------------

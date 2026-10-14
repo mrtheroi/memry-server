@@ -29,6 +29,7 @@ SELF_HOSTING_DOCS="https://github.com/mrtheroi/memry-server/blob/v${MEMRY_VERSIO
 usage() {
     cat <<'USAGE'
 Usage: sh install.sh --email you@example.com [options]
+       sh install.sh --doctor
 
 Installs memry Community (a self-hosted memry server) with Docker and connects
 your agents to it.
@@ -40,6 +41,8 @@ Options:
   --agents LIST      Agents to connect, comma-separated (e.g. claude-code,codex);
                      without it, memry setup asks
   --no-cli           Do not install or run the memry CLI; print how to create a token
+  --doctor           List the memry database volumes and which install owns
+                     them (read only; takes no other option)
   -h, --help         Show this help
 
 Requires Docker with Compose v2 (https://docs.docker.com/get-docker/) and curl.
@@ -60,9 +63,16 @@ parse_args() {
     PORT=""
     AGENTS=""
     INSTALL_CLI=1
+    DOCTOR=0
+    install_option=""
     while [ $# -gt 0 ]; do
         case "$1" in
+            --email | --email=* | --dir | --dir=* | --port | --port=* | --agents | --agents=* | --no-cli)
+                install_option="${1%%=*}" ;;
+        esac
+        case "$1" in
             -h | --help) usage; exit 0 ;;
+            --doctor) DOCTOR=1 ;;
             --email) [ $# -ge 2 ] || usage_error "--email needs a value"; EMAIL="$2"; shift ;;
             --email=*) EMAIL="${1#*=}" ;;
             --dir) [ $# -ge 2 ] || usage_error "--dir needs a value"; DIR="$2"; shift ;;
@@ -76,6 +86,10 @@ parse_args() {
         esac
         shift
     done
+    if [ "$DOCTOR" = 1 ]; then
+        [ -z "$install_option" ] || usage_error "--doctor cannot be combined with ${install_option}"
+        return
+    fi
     [ -n "$PORT" ] || PORT=8000
     case "$PORT" in
         # At most 5 digits, so the range check below cannot overflow.
@@ -121,7 +135,8 @@ preflight() {
     if is_remote_endpoint "$endpoint"; then
         die "Docker is using a remote Docker daemon (${endpoint}): this installer only installs on the local Docker daemon, because it looks for memry on localhost. To deploy on a server, follow the manual deployment guide: ${SELF_HOSTING_DOCS} (sections \"Manual setup\" and \"Reverse proxy and TLS\")."
     fi
-    command -v curl >/dev/null 2>&1 || die "curl is required. Install it with your package manager."
+    # The doctor downloads nothing.
+    [ "$DOCTOR" = 1 ] || command -v curl >/dev/null 2>&1 || die "curl is required. Install it with your package manager."
     docker info >/dev/null 2>&1 \
         || die "the Docker daemon is not running (or this user cannot reach it). Start Docker and try again. Help: ${DOCKER_DOCS}"
 }
@@ -512,9 +527,57 @@ Docs: ${SELF_HOSTING_DOCS}
 SUMMARY
 }
 
+# doctor: lists the memry database volumes (read only). Compose labels name
+# the project of a volume and, on its containers, the directory it was started
+# from. Volumes named *_postgres-data count even without labels.
+doctor() {
+    volumes="$( { docker volume ls --filter label=com.docker.compose.volume=postgres-data --format '{{.Name}}'
+        docker volume ls --format '{{.Name}}' | grep '_postgres-data$'; } 2>/dev/null | sort -u)"
+    if [ -z "$volumes" ]; then
+        say "No memry database volumes found."
+        return
+    fi
+    orphans=""
+    for volume in $volumes; do
+        project="$(docker volume inspect --format '{{index .Labels "com.docker.compose.project"}}' "$volume" 2>/dev/null)"
+        # One "dir=<working_dir label>" line per container, running or not.
+        containers="$(docker ps -a --filter "label=com.docker.compose.project=${project}" \
+            --format 'dir={{.Label "com.docker.compose.project.working_dir"}}' 2>/dev/null)"
+        install_dir="$(printf '%s\n' "$containers" | sed -n 's/^dir=\(.\)/\1/p' | head -n 1)"
+        if [ -z "$containers" ]; then
+            status="orphaned"
+            orphans="${orphans} ${volume}"
+        elif [ -n "$install_dir" ] && [ ! -d "$install_dir" ]; then
+            status="directory missing"
+        else
+            status="in use"
+        fi
+        say "${volume}"
+        say "  project: ${project}"
+        say "  install: ${install_dir:-unknown}"
+        say "  status: ${status}"
+    done
+    [ -z "$orphans" ] || print_orphan_hint
+}
+
+# The commands for an orphaned volume. Nothing is ever deleted here.
+print_orphan_hint() {
+    say ""
+    say "Orphaned volumes belong to no container and no install this script can find."
+    for volume in $orphans; do
+        say "  inspect: docker volume inspect ${volume}"
+        say "  delete:  docker volume rm ${volume}"
+    done
+    say "Deleting a volume removes every memory in it and cannot be undone. Nothing was deleted."
+}
+
 main() {
     parse_args "$@"
     preflight
+    if [ "$DOCTOR" = 1 ]; then
+        doctor
+        exit 0
+    fi
     download_files
     configure_env
     start_server

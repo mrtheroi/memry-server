@@ -47,6 +47,14 @@ Run the `docker compose` commands in this guide from the install directory, in a
 
 If `.env` is missing but a database volume of that directory still exists (`<project>_postgres-data`, or `<directory>_postgres-data` from an install without `COMPOSE_PROJECT_NAME`), the script stops instead of generating a new `DB_PASSWORD` the database would reject. Restore the old `.env` (back it up: it holds `APP_KEY` and `DB_PASSWORD`), or delete the volume and all its data with `docker volume rm <project>_postgres-data`, then run the script again. If the volume belongs to another installation in a directory with the same name, install into a directory with another name.
 
+To see every memry database volume and which install owns it, run `sh install.sh --doctor` (read only: it pulls, starts, writes and deletes nothing, needs no email and cannot be combined with other options). For each volume labelled by Compose, or named `*_postgres-data`, it prints the Compose project, the install directory (the working directory recorded on a container of that project, running or stopped, or `unknown`) and a status:
+
+- `in use`: a container of the project exists and its install directory is present (or not recorded);
+- `directory missing`: a container recorded an install directory that no longer exists;
+- `orphaned`: the project has no container at all, so no install owns the volume.
+
+For orphaned volumes it prints `docker volume inspect <name>` and `docker volume rm <name>`. Deleting a volume removes every memory in it; the doctor never deletes anything.
+
 Running the script again is safe: an existing `.env` is kept (only empty required values are filled in), so `APP_KEY` and `DB_PASSWORD` never change. Each run that connects your agents issues a new token; revoke old ones with `memory:revoke` (see [Users and tokens](#users-and-tokens)). To upgrade later, follow [Upgrades](#upgrades). Put a TLS proxy in front before exposing the server beyond your machine ([Reverse proxy and TLS](#reverse-proxy-and-tls)).
 
 ### Manual setup
