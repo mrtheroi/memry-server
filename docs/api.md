@@ -131,6 +131,34 @@ Token endpoints under a session:
 - `GET /api/auth/tokens` lists the user's tokens; `current` is `false` for all of them, because a session is not a token.
 - `DELETE /api/auth/tokens/{id}` revokes that token, as with a bearer token.
 - `DELETE /api/auth/token` answers `422` (`This request is authenticated with a session, not a token. Use DELETE /api/session to sign out.`).
+## Dashboard: reading memories
+
+JSON read endpoints for the dashboard. They work with a dashboard session or with a bearer token, are scoped to the acting team and, for a restricted member, to the granted projects, and are limited to 120 requests per minute per user (`429` after that). Collections are `{"data": [...]}`. A caller with no team reads nothing: empty collections, and `404` for any id. Without credentials every endpoint answers `401`.
+
+**Personal-scope privacy.** A memory with `scope = personal` is visible only to its author; `scope = project` memories are visible team-wide. The rule applies to these endpoints (list, detail, search and the project counts). The MCP tools (`get_memory`, `search_memory`, `get_context`) keep their current behavior and do not apply it yet.
+
+Memory item (list and search):
+
+```json
+{"id": 12, "title": "Use Sanctum", "type": "decision", "project": "memry", "scope": "project", "topic_key": "auth/sanctum", "excerpt": "first ~200 characters of the content, whitespace collapsed", "created_at": "2026-10-14T10:00:00+00:00", "updated_at": "2026-10-14T10:00:00+00:00"}
+```
+
+The excerpt is the content with whitespace collapsed to single spaces, cut at 200 characters (an ellipsis marks a cut). The detail adds the full `content`.
+
+| Endpoint | Parameters | Response |
+| --- | --- | --- |
+| `GET /api/projects` | none | `{"data": [{"id", "name", "memories_count", "last_activity_at"}]}`: only the projects the caller can see, most recently active first. `memories_count` counts only the memories the caller can read; `last_activity_at` is the latest `updated_at` of those (`null` when there are none, listed last) |
+| `GET /api/memories` | `project` (name, optional), `type` (optional, for example `session_summary`), `cursor` (from `meta`), `per_page` (1 to 100, default 20) | `{"data": [item], "meta": {"next_cursor", "prev_cursor", "per_page"}}`, ordered by `updated_at` then `id`, both descending. `422` for an invalid `per_page` or a `cursor` this endpoint did not issue |
+| `GET /api/memories/{id}` | none | `{"data": {item, "content"}}`. `404` with the same body for a missing id and for a memory the caller cannot read (another team, an ungranted project, another member's personal memory) |
+| `GET /api/memories/search` | `q` (required, trimmed, 1 to 200 characters), `project` (optional), `limit` (1 to 50, default 20) | `{"data": [item]}` ranked by relevance (same full-text search as the MCP tool), with no cursor. `422` for an invalid `q` or `limit` |
+
+Pagination is cursor-based. `meta.next_cursor` is `null` on the last page and `meta.prev_cursor` is `null` on the first; pass either value back as `cursor` with the same filters to move. Cursors are opaque and tied to the ordering: do not build them. Rows with the same `updated_at` keep a stable order, so no row repeats or is skipped between pages.
+
+```bash
+curl -s -b jar -H "Origin: https://app.memry.com.mx" "https://<api-host>/api/memories?project=memry&type=session_summary&per_page=20"
+curl -s -b jar -H "Origin: https://app.memry.com.mx" "https://<api-host>/api/memories?cursor=<meta.next_cursor>&project=memry&type=session_summary&per_page=20"
+```
+
 ## Account deletion
 
 `DELETE /api/account` deletes the authenticated user and all of their data: memories, prompts, every token (not only the one used for the request) and pending login codes. The body must repeat the account email, so a stray call cannot delete the account. The email is trimmed and lowercased, as in the login endpoints. It shares the rate limit of `/mcp/memory` and `/api/context`.
