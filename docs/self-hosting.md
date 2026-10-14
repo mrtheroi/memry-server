@@ -228,6 +228,7 @@ The container speaks plain HTTP. Put it behind a TLS-terminating reverse proxy (
 
 - set `APP_URL` to the public `https://` URL;
 - set `TRUSTED_PROXIES` so forwarded headers are honoured: `*` trusts the proxy calling the container, or list proxy addresses / CIDR ranges separated by commas.
+- only if you run the browser dashboard: set `MEMRY_DASHBOARD_URL` (allowed browser origin), `SANCTUM_STATEFUL_DOMAINS` (dashboard host), `SESSION_DOMAIN` (shared cookie domain, for example `.example.com`) and `SESSION_SECURE_COOKIE=true`. They are empty by default, which allows no browser origin. See [API](api.md#dashboard-session-authentication) and [Security](security.md#dashboard-sessions-cors-and-cookies).
 
 Agents send bearer tokens on every request, so do not expose the server over plain HTTP on the internet.
 

@@ -38,6 +38,15 @@ class User extends Authenticatable
     }
 
     /**
+     * True when the current request was authenticated with a personal access token (CLI, MCP),
+     * false for a dashboard session cookie, whose "token" is a transient placeholder.
+     */
+    public function authenticatedWithToken(): bool
+    {
+        return $this->currentAccessToken() instanceof PersonalAccessToken;
+    }
+
+    /**
      * Get the attributes that should be cast.
      *
      * @return array<string, string>

@@ -11,9 +11,11 @@ class ListTokensController extends Controller
 {
     public function __invoke(Request $request): JsonResponse
     {
-        $currentId = $request->user()->currentAccessToken()->getKey();
+        $user = $request->user();
+        // A dashboard session carries no token of its own, so none of the listed tokens is "current".
+        $currentId = $user->authenticatedWithToken() ? $user->currentAccessToken()->getKey() : null;
 
-        $tokens = $request->user()->tokens()->orderBy('id')->get()
+        $tokens = $user->tokens()->orderBy('id')->get()
             ->map(fn (PersonalAccessToken $token) => [
                 'id' => $token->id,
                 'name' => $token->name,
