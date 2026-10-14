@@ -1256,6 +1256,16 @@ test_doctor_dir_accepts_a_missing_absolute_path_without_dot_segments_whose_paren
     assert_output_contains "volume: ${project}_postgres-data"
 }
 
+test_doctor_dir_resolves_a_relative_missing_path_from_the_root_without_a_double_slash() {
+    project="memry-$(printf '%s' "${T}/a/b/memry" | cksum | cut -d ' ' -f 1)"
+    STUB_VOLUMES="${project}_postgres-data"
+    cd /
+    run_install --doctor --dir "${T#/}/a/b/memry"
+    assert_status 0
+    assert_output_contains "Install directory: ${T}/a/b/memry"
+    assert_output_contains "volume: ${project}_postgres-data"
+}
+
 test_doctor_dir_asks_compose_for_the_project_name_of_an_interpolated_env() {
     mkdir -p "$DIR"
     # shellcheck disable=SC2016 # the ${...} is literal: Compose interpolates it

@@ -183,7 +183,10 @@ canonical_dir_or_missing() {
         case "$parent" in /) printf '/%s' "$(basename "$trimmed")" ;; *) printf '%s/%s' "$parent" "$(basename "$trimmed")" ;; esac
         return
     fi
-    case "$trimmed" in /*) printf '%s' "$trimmed" ;; *) printf '%s/%s' "$(pwd)" "${trimmed#./}" ;; esac
+    case "$trimmed" in
+        /*) printf '%s' "$trimmed" ;;
+        *) here="$(pwd)"; printf '%s/%s' "${here%/}" "${trimmed#./}" ;;
+    esac
 }
 
 download_files() {
