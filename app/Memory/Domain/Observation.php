@@ -2,6 +2,8 @@
 
 namespace App\Memory\Domain;
 
+use App\Team\Domain\AccessContext;
+use App\Team\Domain\Role;
 use DateTimeImmutable;
 
 final readonly class Observation
@@ -23,6 +25,15 @@ final readonly class Observation
         public ?DateTimeImmutable $createdAt = null,
     ) {
         $this->project = ProjectName::normalize($project);
+    }
+
+    /**
+     * The author may always delete; owners and admins may delete what they can read. Reading is checked elsewhere.
+     */
+    public function canBeDeletedBy(AccessContext $context): bool
+    {
+        return $this->userId === $context->userId
+            || in_array($context->role, [Role::Owner, Role::Admin], true);
     }
 
     public function withTeamId(?int $teamId): self

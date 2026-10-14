@@ -108,6 +108,15 @@ final class EloquentMemoryRepository implements MemoryRepository
         return $record ? $this->toDomain($record) : null;
     }
 
+    public function deleteInTeam(AccessContext $context, int $id): bool
+    {
+        if ($context->isDenied() || $context->isSystem()) {
+            return false;
+        }
+
+        return $this->withinTeam(ObservationRecord::where('id', $id), $context->teamId)->delete() > 0;
+    }
+
     public function searchVisible(AccessContext $context, string $query, int $limit, ?string $project = null): array
     {
         return $this->ranked($context, $query, $limit, $project, fn (Builder $builder) => $this->scopeToReadable($builder, $context));

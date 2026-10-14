@@ -9,6 +9,7 @@ use App\Http\Controllers\Auth\RevokeTokenController;
 use App\Http\Controllers\Auth\SessionController;
 use App\Http\Controllers\Auth\TokenController;
 use App\Http\Controllers\ContextController;
+use App\Http\Controllers\Dashboard\DeleteMemoryController;
 use App\Http\Controllers\Dashboard\ListMemoriesController;
 use App\Http\Controllers\Dashboard\ListProjectsController;
 use App\Http\Controllers\Dashboard\SearchMemoriesController;
@@ -33,3 +34,4 @@ Route::get('/projects', ListProjectsController::class)->middleware(['auth:sanctu
 Route::get('/memories', ListMemoriesController::class)->middleware(['auth:sanctum', 'throttle:dashboard']);
 Route::get('/memories/search', SearchMemoriesController::class)->middleware(['auth:sanctum', 'throttle:dashboard']);
 Route::get('/memories/{id}', ShowMemoryController::class)->whereNumber('id')->middleware(['auth:sanctum', 'throttle:dashboard']);
+Route::delete('/memories/{id}', DeleteMemoryController::class)->whereNumber('id')->middleware(['auth:sanctum', 'throttle:dashboard']);
