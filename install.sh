@@ -540,9 +540,15 @@ doctor() {
     orphans=""
     for volume in $volumes; do
         project="$(docker volume inspect --format '{{index .Labels "com.docker.compose.project"}}' "$volume" 2>/dev/null)"
+        # A volume without labels is named <project>_postgres-data by Compose.
+        [ -n "$project" ] || project="${volume%_postgres-data}"
         # One "dir=<working_dir label>" line per container, running or not.
-        containers="$(docker ps -a --filter "label=com.docker.compose.project=${project}" \
-            --format 'dir={{.Label "com.docker.compose.project.working_dir"}}' 2>/dev/null)"
+        # Never filter on an empty project: it would match unrelated containers.
+        containers=""
+        if [ -n "$project" ]; then
+            containers="$(docker ps -a --filter "label=com.docker.compose.project=${project}" \
+                --format 'dir={{.Label "com.docker.compose.project.working_dir"}}' 2>/dev/null)"
+        fi
         install_dir="$(printf '%s\n' "$containers" | sed -n 's/^dir=\(.\)/\1/p' | head -n 1)"
         if [ -z "$containers" ]; then
             status="orphaned"

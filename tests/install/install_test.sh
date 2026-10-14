@@ -103,8 +103,9 @@ case "$*" in
         for volume in ${STUB_VOLUMES:-}; do echo "$volume"; done
         ;;
     "volume inspect --format"*)
-        # The Compose project label of a volume: its name without the volume key.
-        echo "${5%_postgres-data}"
+        # The Compose project label of a volume: its name without the volume key,
+        # empty for the volumes in STUB_UNLABELED_VOLUMES.
+        case " ${STUB_UNLABELED_VOLUMES:-} " in *" ${5} "*) echo "" ;; *) echo "${5%_postgres-data}" ;; esac
         ;;
     "ps -a --filter"*)
         # One line (dir=<working_dir label>) per container of the project asked
@@ -209,7 +210,7 @@ setup_test() {
         STUB_IMAGE_STATUS STUB_TOKEN STUB_UP_STATUS STUB_MEMRY_VERSION STUB_SETUP_STATUS \
         STUB_CURL_FAIL STUB_VOLUME_STATUS STUB_EXISTING_VOLUME STUB_CLOCK_STEP STUB_PUBLISHED_PORT \
         STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_NO_TOKEN STUB_CONTEXT_HOST STUB_REPO_DIGESTS STUB_IMAGE_ID STUB_TAG_STATUS \
-        STUB_VOLUMES STUB_CONTAINERS
+        STUB_VOLUMES STUB_CONTAINERS STUB_UNLABELED_VOLUMES
     stub_docker
     stub_curl
     stub_memry
@@ -223,7 +224,7 @@ run_install() {
     stub_value=""
     for stub_var in STUB_LOG STUB_SOURCE STUB_DAEMON_STATUS STUB_COMPOSE_VERSION STUB_COMPOSE_STATUS \
         STUB_PULL_STATUS STUB_IMAGE_STATUS STUB_TOKEN STUB_NO_TOKEN STUB_VOLUME_STATUS \
-        STUB_EXISTING_VOLUME STUB_PUBLISHED_PORT STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_CONTEXT_HOST STUB_REPO_DIGESTS STUB_IMAGE_ID STUB_TAG_STATUS STUB_VOLUMES STUB_CONTAINERS; do
+        STUB_EXISTING_VOLUME STUB_PUBLISHED_PORT STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_CONTEXT_HOST STUB_REPO_DIGESTS STUB_IMAGE_ID STUB_TAG_STATUS STUB_VOLUMES STUB_CONTAINERS STUB_UNLABELED_VOLUMES; do
         eval "stub_value=\${$stub_var-}"
         printf "%s='%s'; export %s\n" "$stub_var" "$stub_value" "$stub_var"
     done > "${STUBS}/docker.env"
@@ -251,6 +252,7 @@ run_install() {
         ${STUB_TAG_STATUS:+STUB_TAG_STATUS="$STUB_TAG_STATUS"} \
         ${STUB_VOLUMES:+STUB_VOLUMES="$STUB_VOLUMES"} \
         ${STUB_CONTAINERS:+STUB_CONTAINERS="$STUB_CONTAINERS"} \
+        ${STUB_UNLABELED_VOLUMES:+STUB_UNLABELED_VOLUMES="$STUB_UNLABELED_VOLUMES"} \
         ${STUB_CONTEXT_HOST:+STUB_CONTEXT_HOST="$STUB_CONTEXT_HOST"} \
         ${STUB_CLOCK_STEP:+STUB_CLOCK_STEP="$STUB_CLOCK_STEP"} \
         ${MEMRY_VERSION_OVERRIDE:+MEMRY_VERSION="$MEMRY_VERSION_OVERRIDE"} \
@@ -1037,6 +1039,17 @@ test_doctor_needs_neither_curl_nor_an_email() {
     rm -f "${STUBS}/curl"
     run_install --doctor
     assert_status 0
+}
+
+test_doctor_derives_the_project_of_an_unlabeled_volume_from_its_name() {
+    mkdir -p "${T}/work"
+    STUB_VOLUMES="legacy_postgres-data" STUB_UNLABELED_VOLUMES="legacy_postgres-data" STUB_CONTAINERS="=${T}/work"
+    run_install --doctor
+    assert_status 0
+    assert_output_contains "project: legacy"
+    assert_output_contains "status: orphaned"
+    assert_output_not_contains "status: in use"
+    assert_log_not_contains "com.docker.compose.project= "
 }
 
 # --- run --------------------------------------------------------------------
