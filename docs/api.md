@@ -152,6 +152,8 @@ The excerpt is the content with whitespace collapsed to single spaces, cut at 20
 | `GET /api/memories/{id}` | none | `{"data": {item, "content"}}`. `404` with the same body for a missing id and for a memory the caller cannot read (another team, an ungranted project, another member's personal memory) |
 | `GET /api/memories/search` | `q` (required, trimmed, 1 to 200 characters), `project` (optional), `limit` (1 to 50, default 20) | `{"data": [item]}` ranked by relevance (same full-text search as the MCP tool), with no cursor. `422` for an invalid `q` or `limit` |
 
+Ids (memories, projects, tokens) are JSON numbers. They come from database sequences and stay far below 2^53, so JavaScript's `JSON.parse` reads them exactly; no string ids are needed. A move to non-sequential ids would be a new API version.
+
 Pagination is cursor-based. `meta.next_cursor` is `null` on the last page and `meta.prev_cursor` is `null` on the first; pass either value back as `cursor` with the same filters to move. Cursors are opaque, tied to the ordering and signed with the server's `APP_KEY`: a built or edited cursor is rejected with `422`, and rotating `APP_KEY` invalidates the cursors already handed out. Rows with the same `updated_at` keep a stable order, so no row repeats or is skipped between pages.
 
 ```bash
