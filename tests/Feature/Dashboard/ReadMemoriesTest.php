@@ -130,3 +130,14 @@ test('a cursor with an impossible date answers 422, not a server error', functio
 
     readAs(bearerOf($ada), "/api/memories?cursor={$forged}")->assertUnprocessable()->assertJsonValidationErrors('cursor');
 });
+
+test('only cursors the server issued are accepted, even well-formed ones', function (string $updatedAt) {
+    $ada = User::factory()->create();
+    remember($ada, 'One', 'content');
+    $forged = rtrim(strtr(base64_encode(json_encode(['updated_at' => $updatedAt, 'id' => 1, '_pointsToNextItems' => true])), '+/', '-_'), '=');
+
+    readAs(bearerOf($ada), "/api/memories?cursor={$forged}")->assertUnprocessable()->assertJsonValidationErrors('cursor');
+})->with([
+    'a plausible date' => ['2026-01-01 10:00:00'],
+    'year zero' => ['0000-01-01 00:00:00'],
+]);

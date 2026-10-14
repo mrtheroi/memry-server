@@ -152,7 +152,7 @@ The excerpt is the content with whitespace collapsed to single spaces, cut at 20
 | `GET /api/memories/{id}` | none | `{"data": {item, "content"}}`. `404` with the same body for a missing id and for a memory the caller cannot read (another team, an ungranted project, another member's personal memory) |
 | `GET /api/memories/search` | `q` (required, trimmed, 1 to 200 characters), `project` (optional), `limit` (1 to 50, default 20) | `{"data": [item]}` ranked by relevance (same full-text search as the MCP tool), with no cursor. `422` for an invalid `q` or `limit` |
 
-Pagination is cursor-based. `meta.next_cursor` is `null` on the last page and `meta.prev_cursor` is `null` on the first; pass either value back as `cursor` with the same filters to move. Cursors are opaque and tied to the ordering: do not build them. Rows with the same `updated_at` keep a stable order, so no row repeats or is skipped between pages.
+Pagination is cursor-based. `meta.next_cursor` is `null` on the last page and `meta.prev_cursor` is `null` on the first; pass either value back as `cursor` with the same filters to move. Cursors are opaque, tied to the ordering and signed with the server's `APP_KEY`: a built or edited cursor is rejected with `422`, and rotating `APP_KEY` invalidates the cursors already handed out. Rows with the same `updated_at` keep a stable order, so no row repeats or is skipped between pages.
 
 ```bash
 curl -s -b jar -H "Origin: https://app.memry.com.mx" "https://<api-host>/api/memories?project=memry&type=session_summary&per_page=20"

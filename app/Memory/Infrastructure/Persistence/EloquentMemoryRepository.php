@@ -10,9 +10,7 @@ use App\Memory\Domain\ProjectName;
 use App\Memory\Domain\ProjectRepository;
 use App\Team\Domain\AccessContext;
 use App\Team\Domain\AccessDenied;
-use DateTimeImmutable;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Pagination\Cursor;
 
 final class EloquentMemoryRepository implements MemoryRepository
 {
@@ -78,9 +76,7 @@ final class EloquentMemoryRepository implements MemoryRepository
 
     public function pageVisible(AccessContext $context, ?string $project, ?string $type, ?string $cursor, int $perPage): MemoryPage
     {
-        if ($cursor !== null && ! $this->isIssuedCursor($cursor)) {
-            throw InvalidCursor::make();
-        }
+        $cursor = $cursor === null ? null : ($this->unsignedCursor($cursor) ?? throw InvalidCursor::make());
 
         if ($context->isDenied()) {
             return new MemoryPage([], null, null, $perPage);
@@ -95,8 +91,8 @@ final class EloquentMemoryRepository implements MemoryRepository
 
         return new MemoryPage(
             $page->getCollection()->map(fn (ObservationRecord $record) => $this->toDomain($record))->all(),
-            $page->nextCursor()?->encode(),
-            $page->previousCursor()?->encode(),
+            $this->signCursor($page->nextCursor()?->encode()),
+            $this->signCursor($page->previousCursor()?->encode()),
             $perPage,
         );
     }
@@ -245,30 +241,31 @@ final class EloquentMemoryRepository implements MemoryRepository
     /**
      * A cursor is only trusted if it decodes to the keys this list orders by; anything else would reach the query.
      */
-    private function isIssuedCursor(string $encoded): bool
+    /**
+     * Cursors are signed with the app key, so only a cursor this server issued is accepted: a
+     * forged or edited one (any field, any date the database cannot parse) never reaches a query.
+     */
+    private function signCursor(?string $encoded): ?string
     {
-        $cursor = Cursor::fromEncoded($encoded);
-
-        if ($cursor === null) {
-            return false;
-        }
-
-        $parameters = $cursor->toArray();
-
-        return array_keys($parameters) === ['updated_at', 'id', '_pointsToNextItems']
-            && $this->isTimestamp($parameters['updated_at'])
-            && is_int($parameters['id'])
-            && is_bool($parameters['_pointsToNextItems']);
+        return $encoded === null ? null : $encoded.'.'.$this->cursorMac($encoded);
     }
 
-    /**
-     * The exact `Y-m-d H:i:s` a cursor carries; impossible dates such as 2026-02-30 do not round-trip.
-     */
-    private function isTimestamp(mixed $value): bool
+    private function unsignedCursor(string $signed): ?string
     {
-        return is_string($value)
-            && ($date = DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $value)) !== false
-            && $date->format('Y-m-d H:i:s') === $value;
+        $dot = strrpos($signed, '.');
+
+        if ($dot === false) {
+            return null;
+        }
+
+        $encoded = substr($signed, 0, $dot);
+
+        return hash_equals($this->cursorMac($encoded), substr($signed, $dot + 1)) ? $encoded : null;
+    }
+
+    private function cursorMac(string $encoded): string
+    {
+        return hash_hmac('sha256', 'memry-cursor|'.$encoded, (string) config('app.key'));
     }
 
     private function withinTeam(Builder $builder, int $teamId): Builder
