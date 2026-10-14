@@ -108,11 +108,16 @@ curl -s -b jar -c jar -X DELETE https://<api-host>/api/session \
 
 Every state-changing request (`POST`, `DELETE`) needs the `X-XSRF-TOKEN` header; without it the server answers `419`.
 
+Axios only copies the `XSRF-TOKEN` cookie into `X-XSRF-TOKEN` automatically on same-origin requests. For a cross-origin SPA (app and API on different subdomains) set both `withCredentials: true` and `withXSRFToken: true` (Axios 1.6 or newer), or read the `XSRF-TOKEN` cookie yourself and send it in the `X-XSRF-TOKEN` header.
+
+`POST /api/session` is only available to requests from a stateful domain: from any other origin (or without `Origin`/`Referer`) it answers `403 Session login is only available to the dashboard origin.` without consuming the code, so use `POST /api/auth/token` there.
+
 | Endpoint | Status | When |
 | --- | --- | --- |
 | `GET /sanctum/csrf-cookie` | `204` | Sets the `XSRF-TOKEN` cookie |
 | `POST /api/session` | `204` | The code is valid: the user is signed in (created on first login, with its personal team). No token is issued |
 | | `422` | Validation errors, or `Invalid or expired code.` (same rules and message as `POST /api/auth/token`) |
+| | `403` | The request is not from a stateful domain (`SANCTUM_STATEFUL_DOMAINS`); the code is not consumed |
 | | `419` | Missing or wrong CSRF token |
 | | `429` | Rate limit exceeded for the IP (shared with `POST /api/auth/token`) |
 | `DELETE /api/session` | `204` | The session is ended and the CSRF token regenerated |

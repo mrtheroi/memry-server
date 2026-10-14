@@ -251,3 +251,20 @@ test('a state-changing dashboard request without the CSRF token is refused with 
     asDashboard($csrf->getCookie(sessionCookieName())->getValue())->withHeader('X-XSRF-TOKEN', $xsrf)
         ->postJson('/api/session', $body)->assertNoContent();
 });
+
+test('a non-stateful POST /api/session is refused without burning the code or creating a user', function () {
+    $this->postJson('/api/auth/code', ['email' => 'new@example.com'])->assertAccepted();
+    $code = null;
+    Mail::assertSent(LoginCodeMail::class, function (LoginCodeMail $mail) use (&$code) {
+        $code = $mail->code;
+
+        return true;
+    });
+
+    $this->postJson('/api/session', ['email' => 'new@example.com', 'code' => $code])
+        ->assertStatus(403)
+        ->assertExactJson(['message' => 'Session login is only available to the dashboard origin.']);
+
+    expect(User::where('email', 'new@example.com')->exists())->toBeFalse();
+    $this->postJson('/api/auth/token', ['email' => 'new@example.com', 'code' => $code])->assertOk()->assertJsonStructure(['token']);
+});

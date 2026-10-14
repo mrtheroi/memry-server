@@ -14,6 +14,12 @@ class SessionController extends Controller
 {
     public function store(Request $request, RedeemEmailCode $redeemEmailCode): Response|JsonResponse
     {
+        // Sanctum only attaches a session to requests from a stateful domain. Check before redeeming, or the code
+        // would be burned and the user provisioned for a login that cannot complete.
+        if (! $request->hasSession()) {
+            return response()->json(['message' => 'Session login is only available to the dashboard origin.'], 403);
+        }
+
         $request->validate([
             'email' => ['required', 'string', 'email', 'max:255'],
             'code' => ['required', 'string', 'digits:6'],
