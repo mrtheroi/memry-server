@@ -35,9 +35,11 @@ class DeleteAccountController extends Controller
             $user->delete();
         });
 
-        // A dashboard session outlives its user otherwise; end it like DELETE /api/session does.
+        // A dashboard session outlives its user otherwise, so end it. Not with logout(): it
+        // rotates and saves a non-empty remember_token, and saving the deleted model would
+        // insert the user again. Dropping the session data and the in-memory user writes nothing.
         if (! $user->authenticatedWithToken()) {
-            Auth::guard('web')->logout();
+            Auth::guard('web')->forgetUser();
             $request->session()->invalidate();
             $request->session()->regenerateToken();
         }

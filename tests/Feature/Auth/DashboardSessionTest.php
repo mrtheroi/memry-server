@@ -291,3 +291,14 @@ test('DELETE /api/account under a session with the wrong email deletes nothing a
 
     asDashboard($cookie)->getJson('/api/me')->assertOk();
 });
+
+test('DELETE /api/account under a session does not resurrect a user that has a remember token', function () {
+    $response = dashboardLogin();
+    $cookie = sessionCookieFrom($response);
+    $user = User::where('email', 'ada@example.com')->firstOrFail();
+    $user->forceFill(['remember_token' => 'remembered'])->save();
+
+    asDashboard($cookie)->deleteJson('/api/account', ['email' => 'ada@example.com'])->assertNoContent();
+
+    expect(User::where('email', 'ada@example.com')->exists())->toBeFalse();
+});
