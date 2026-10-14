@@ -29,6 +29,7 @@ SELF_HOSTING_DOCS="https://github.com/mrtheroi/memry-server/blob/v${MEMRY_VERSIO
 usage() {
     cat <<'USAGE'
 Usage: sh install.sh --email you@example.com [options]
+       sh install.sh --doctor [--dir DIR]
 
 Installs memry Community (a self-hosted memry server) with Docker and connects
 your agents to it.
@@ -40,6 +41,8 @@ Options:
   --agents LIST      Agents to connect, comma-separated (e.g. claude-code,codex);
                      without it, memry setup asks
   --no-cli           Do not install or run the memry CLI; print how to create a token
+  --doctor           Read only: list the database volumes that may be memry's, or
+                     with --dir DIR check that install (takes no other option)
   -h, --help         Show this help
 
 Requires Docker with Compose v2 (https://docs.docker.com/get-docker/) and curl.
@@ -60,13 +63,21 @@ parse_args() {
     PORT=""
     AGENTS=""
     INSTALL_CLI=1
+    DOCTOR=0
+    DIR_GIVEN=0
+    install_option=""
     while [ $# -gt 0 ]; do
         case "$1" in
+            --email | --email=* | --port | --port=* | --agents | --agents=* | --no-cli)
+                install_option="${1%%=*}" ;;
+        esac
+        case "$1" in
             -h | --help) usage; exit 0 ;;
+            --doctor) DOCTOR=1 ;;
             --email) [ $# -ge 2 ] || usage_error "--email needs a value"; EMAIL="$2"; shift ;;
             --email=*) EMAIL="${1#*=}" ;;
-            --dir) [ $# -ge 2 ] || usage_error "--dir needs a value"; DIR="$2"; shift ;;
-            --dir=*) DIR="${1#*=}" ;;
+            --dir) [ $# -ge 2 ] || usage_error "--dir needs a value"; DIR="$2"; DIR_GIVEN=1; shift ;;
+            --dir=*) DIR="${1#*=}"; DIR_GIVEN=1 ;;
             --port) [ $# -ge 2 ] || usage_error "--port needs a value"; PORT="$2"; shift ;;
             --port=*) PORT="${1#*=}" ;;
             --agents) [ $# -ge 2 ] || usage_error "--agents needs a value"; AGENTS="$2"; shift ;;
@@ -76,6 +87,10 @@ parse_args() {
         esac
         shift
     done
+    if [ "$DOCTOR" = 1 ]; then
+        [ -z "$install_option" ] || usage_error "--doctor cannot be combined with ${install_option}"
+        return
+    fi
     [ -n "$PORT" ] || PORT=8000
     case "$PORT" in
         # At most 5 digits, so the range check below cannot overflow.
@@ -121,7 +136,8 @@ preflight() {
     if is_remote_endpoint "$endpoint"; then
         die "Docker is using a remote Docker daemon (${endpoint}): this installer only installs on the local Docker daemon, because it looks for memry on localhost. To deploy on a server, follow the manual deployment guide: ${SELF_HOSTING_DOCS} (sections \"Manual setup\" and \"Reverse proxy and TLS\")."
     fi
-    command -v curl >/dev/null 2>&1 || die "curl is required. Install it with your package manager."
+    # The doctor downloads nothing.
+    [ "$DOCTOR" = 1 ] || command -v curl >/dev/null 2>&1 || die "curl is required. Install it with your package manager."
     docker info >/dev/null 2>&1 \
         || die "the Docker daemon is not running (or this user cannot reach it). Start Docker and try again. Help: ${DOCKER_DOCS}"
 }
@@ -139,15 +155,42 @@ fetch() {
     mv "$part" "$2"
 }
 
-download_files() {
-    # A literal ~ (as in --dir=~/memry) is not expanded by the shell.
+# A literal ~ (as in --dir=~/memry) is not expanded by the shell.
+expand_tilde() {
     # shellcheck disable=SC2088
     case "$DIR" in
         "~") DIR="$HOME" ;;
         "~/"*) DIR="${HOME}/${DIR#"~/"}" ;;
     esac
+}
+
+# canonical_dir <existing directory>: its absolute path, the one the installer
+# hashes into the project name.
+canonical_dir() {
+    (cd "$1" && pwd)
+}
+
+# canonical_dir_or_missing <path>: the same absolute path for a directory that
+# may not exist, without creating it. A missing directory is its canonical
+# parent plus its name; with no parent either, the path made absolute with the
+# "." segments removed.
+canonical_dir_or_missing() {
+    if [ -d "$1" ]; then canonical_dir "$1"; return; fi
+    trimmed="${1%/}"
+    parent="$(dirname "$trimmed")"
+    if [ -d "$parent" ]; then
+        parent="$(canonical_dir "$parent")"
+        case "$parent" in /) printf '/%s' "$(basename "$trimmed")" ;; *) printf '%s/%s' "$parent" "$(basename "$trimmed")" ;; esac
+        return
+    fi
+    case "$trimmed" in /*) absolute="$trimmed" ;; *) absolute="$(pwd)/${trimmed}" ;; esac
+    printf '%s' "$absolute" | sed -e 's|/\(\./\)\{1,\}|/|g' -e 's|/\.$||' -e 's|//*|/|g'
+}
+
+download_files() {
+    expand_tilde
     mkdir -p "$DIR"
-    DIR="$(cd "$DIR" && pwd)"
+    DIR="$(canonical_dir "$DIR")"
     # The directory as it can be pasted into a shell, for the printed commands.
     QDIR="$(shell_quote "$DIR")"
     [ -f "${DIR}/docker-compose.yml" ] || fetch docker-compose.yml "${DIR}/docker-compose.yml"
@@ -512,9 +555,213 @@ Docs: ${SELF_HOSTING_DOCS}
 SUMMARY
 }
 
+# is_memry_image <image reference>: the repository is memry-server, whatever
+# the registry, tag or digest (ghcr.io/mrtheroi/memry-server:0.18.1,
+# memry-server:local, memry-server:pinned-..., ...@sha256:...).
+is_memry_image() {
+    name="${1##*/}"
+    name="${name%%@*}"
+    name="${name%%:*}"
+    [ "$name" = "memry-server" ]
+}
+
+# doctor: lists the memry database volumes (read only). Compose labels name
+# the project of a volume and, on its containers, the directory it was started
+# from. Volumes named *_postgres-data count even without labels.
+#
+# Ownership is never claimed from the volume alone: memry's compose file puts
+# no memry label on the volume and must not (Compose hashes the volume's whole
+# config, labels included, and would offer to recreate an existing volume with
+# its data). The only evidence is a container of the project that runs a
+# memry-server image.
+doctor() {
+    labeled="$(docker volume ls --filter label=com.docker.compose.volume=postgres-data --format '{{.Name}}')" \
+        || die "could not list the Docker volumes: docker volume ls failed."
+    named="$(docker volume ls --format '{{.Name}}')" \
+        || die "could not list the Docker volumes: docker volume ls failed."
+    # Only a grep that finds nothing counts as an empty list.
+    suffixed="$(printf '%s\n' "$named" | grep '_postgres-data$' || true)"
+    volumes="$(printf '%s\n%s\n' "$labeled" "$suffixed" | sed '/^$/d' | sort -u)"
+    if [ -z "$volumes" ]; then
+        say "No memry database volumes found."
+        return
+    fi
+    for volume in $volumes; do
+        project="$(docker volume inspect --format '{{index .Labels "com.docker.compose.project"}}' "$volume")" \
+            || die "could not inspect the volume ${volume}: docker volume inspect failed."
+        # A volume without labels is named <project>_postgres-data by Compose.
+        [ -n "$project" ] || project="${volume%_postgres-data}"
+        created="$(docker volume inspect --format '{{.CreatedAt}}' "$volume")" \
+            || die "could not inspect the volume ${volume}: docker volume inspect failed."
+        say "${volume}"
+        say "  project: ${project}"
+        say "  created: ${created}"
+        project_containers "$project"
+        print_containers
+        project_status
+    done
+    say ""
+    say "To check an install directory, run the doctor with --dir <directory>."
+    say "The doctor never deletes anything."
+}
+
+# doctor_dir: proves what belongs to ONE install directory (read only). The
+# volume names come from the installer's own logic (the project in .env, or
+# for a missing .env the hashed and the legacy directory-name projects), so a
+# volume found here is that install's, never another stack's.
+doctor_dir() {
+    expand_tilde
+    # Nothing is created here: a missing directory is only reported.
+    DIR="$(canonical_dir_or_missing "$DIR")"
+    QDIR="$(shell_quote "$DIR")"
+    all_volumes="$(docker volume ls --format '{{.Name}}')" \
+        || die "could not list the Docker volumes: docker volume ls failed."
+    env_file="${DIR}/.env"
+    unconfirmed=0
+    if [ -f "$env_file" ]; then
+        # Compose resolves interpolation and its defaults exactly: ask it, with
+        # the installer's isolated environment. The top-level "name:" of the
+        # resolved config (a nested "name:" is indented) is the project.
+        project="$(compose config 2>/dev/null | sed -n 's/^name:[[:space:]]*//p' | head -n 1 | tr -d "\"'")" || project=""
+        if [ -z "$project" ]; then
+            project="$(env_get COMPOSE_PROJECT_NAME "$env_file")"
+            # Without the key an install uses Compose's default project.
+            [ -n "$project" ] || project="$(default_project_name)"
+            unconfirmed=1
+        fi
+        projects="$project"
+    else
+        projects="$(project_name) $(default_project_name)"
+    fi
+    say "Install directory: ${DIR}"
+    if [ -f "$env_file" ]; then say ".env: present"; else say ".env: missing"; fi
+    if [ "$unconfirmed" = 1 ]; then
+        say "project: ${project} (could not be confirmed with Compose; read from .env)"
+    fi
+    found_volumes=""
+    hashed_found=""
+    legacy_found=""
+    container_count=0
+    running_count=0
+    checked=""
+    for project in $projects; do
+        volume="${project}_postgres-data"
+        checked="${checked:+${checked}, }${volume}"
+        if printf '%s\n' "$all_volumes" | grep -Fxq -- "$volume"; then
+            found_volumes="${found_volumes} ${volume}"
+            if [ "$project" = "$(project_name)" ]; then hashed_found="$volume"; else legacy_found="$volume"; fi
+        fi
+        project_containers "$project"
+        [ -z "$CONTAINERS" ] || container_count=$((container_count + 1))
+        # Only a running app service container makes an install healthy:
+        # `docker ps -a` also lists the ones stopped with `docker compose stop`,
+        # postgres can run while the app is stopped, and a one-off
+        # `compose run app ...` container publishes no port.
+        running="$(docker ps --filter "label=com.docker.compose.project=${project}" \
+            --filter label=com.docker.compose.service=app \
+            --filter label=com.docker.compose.oneoff=False --format '{{.ID}}')" \
+            || die "could not list the running containers of the project ${project}: docker ps failed."
+        [ -z "$running" ] || running_count=$((running_count + 1))
+    done
+    for volume in $found_volumes; do
+        say "volume: ${volume}"
+    done
+    say "containers: $([ "$container_count" -gt 0 ] && echo present || echo none)"
+    say ""
+    if [ -z "$found_volumes" ]; then
+        say "No database volume of this install exists (checked: ${checked})."
+    elif [ ! -f "$env_file" ]; then
+        say "The database volume of this install exists, but ${env_file} is missing, and the"
+        say "volume uses the password of the old .env. Choose one:"
+        say ""
+        say "  1. Restore that .env (it holds APP_KEY and DB_PASSWORD), then run the installer again."
+        if [ -n "$hashed_found" ]; then
+            say "  2. Only if you do not want the data, delete the volume:"
+            say "         docker volume rm ${hashed_found}"
+            say "     This removes every memory in it and cannot be undone."
+        fi
+        if [ -n "$legacy_found" ]; then
+            say ""
+            say "${legacy_found} is named after the directory only, so it may be this install's,"
+            say "but the same name can belong to another installation in a directory with the"
+            say "same name. Deleting it is not suggested: ownership cannot be proven."
+        fi
+        say ""
+        say "If the volume belongs to another installation in a directory with the same name,"
+        say "install into a directory with another name."
+    elif [ "$running_count" -eq 0 ]; then
+        say "Stopped: the data is intact. Start it with:"
+        say ""
+        say "    cd ${QDIR} && docker compose up -d"
+    else
+        say "Healthy: .env, the database volume and running containers are all present. Nothing to do."
+    fi
+    say "The doctor never deletes anything."
+}
+
+# print_containers: the containers found by project_containers.
+print_containers() {
+    [ -n "$CONTAINERS" ] || return 0
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        image="${line#image=}"
+        image="${image%% dir=*}"
+        say "  container: ${image} in ${line#*' dir='}"
+    done <<LINES
+${CONTAINERS}
+LINES
+}
+
+# project_containers <project>: sets CONTAINERS to one "image=<image> dir=<dir>"
+# line per container (running or not) of the Compose project, MEMRY_FOUND to 1
+# when one of them runs a memry-server image and MEMRY_DIR to that container's
+# install directory. Never filters on an empty project: it would match
+# unrelated containers.
+project_containers() {
+    CONTAINERS=""
+    MEMRY_DIR=""
+    MEMRY_FOUND=0
+    [ -n "$1" ] || return 0
+    CONTAINERS="$(docker ps -a --filter "label=com.docker.compose.project=${1}" \
+        --format 'image={{.Image}} dir={{.Label "com.docker.compose.project.working_dir"}}')" \
+        || die "could not list the containers of the project ${1}: docker ps failed."
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        image="${line#image=}"
+        image="${image%% dir=*}"
+        if is_memry_image "$image"; then
+            MEMRY_FOUND=1
+            MEMRY_DIR="${line#*' dir='}"
+            return 0
+        fi
+    done <<LINES
+${CONTAINERS}
+LINES
+}
+
+project_status() {
+    if [ "$MEMRY_FOUND" = 1 ]; then
+        if [ -n "$MEMRY_DIR" ] && [ ! -d "$MEMRY_DIR" ]; then
+            say "  status: memry install at ${MEMRY_DIR} (the directory no longer exists)"
+        else
+            say "  status: memry install at ${MEMRY_DIR:-unknown}"
+        fi
+    elif [ -z "$CONTAINERS" ]; then
+        say "  status: stopped or unconfirmed (no containers)"
+        say "  It may be a memry install stopped with \`docker compose down\` (that keeps the"
+        say "  volume), or the database of another project."
+    else
+        say "  status: not memry (containers use other images)"
+    fi
+}
+
 main() {
     parse_args "$@"
     preflight
+    if [ "$DOCTOR" = 1 ]; then
+        if [ "$DIR_GIVEN" = 1 ]; then doctor_dir; else doctor; fi
+        exit 0
+    fi
     download_files
     configure_env
     start_server

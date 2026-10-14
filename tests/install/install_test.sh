@@ -84,6 +84,15 @@ case "$*" in
         echo "${STUB_APP_IMAGE:-$(sed -n 's/^MEMRY_IMAGE="*\([^" ]*\).*/\1/p' .env | tail -n 1)}"
         echo "postgres:16-alpine"
         ;;
+    "compose config")
+        # The resolved project: its name is STUB_COMPOSE_PROJECT. Without it the
+        # command fails, as with a missing docker-compose.yml.
+        [ -n "${STUB_COMPOSE_PROJECT:-}" ] || exit 1
+        echo "name: ${STUB_COMPOSE_PROJECT}"
+        echo "services:"
+        echo "  db:"
+        echo "    name: not-the-project"
+        ;;
     "compose port app 8000")
         # The port Compose published: STUB_PUBLISHED_PORT, or the digits of
         # APP_PORT in .env.
@@ -97,6 +106,50 @@ case "$*" in
             --*) echo "${STUB_CONTEXT_HOST:-}" ;;
             *) cat "${STUB_LOG}.context.${3}" 2>/dev/null || exit 1 ;;
         esac
+        ;;
+    "volume ls "*)
+        # The volumes that exist: STUB_VOLUMES, space separated. STUB_VOLUME_LS_STATUS
+        # makes the command fail.
+        [ -z "${STUB_VOLUME_LS_STATUS:-}" ] || exit "$STUB_VOLUME_LS_STATUS"
+        for volume in ${STUB_VOLUMES:-}; do echo "$volume"; done
+        ;;
+    "volume inspect --format"*)
+        # The creation date (STUB_CREATED_AT) or the Compose project label of a
+        # volume: its name without the volume key, empty for the volumes in
+        # STUB_UNLABELED_VOLUMES.
+        case "${4:-}" in *CreatedAt*) echo "${STUB_CREATED_AT:-2025-01-02T03:04:05Z}"; exit 0 ;; esac
+        case " ${STUB_UNLABELED_VOLUMES:-} " in *" ${5} "*) echo "" ;; *) echo "${5%_postgres-data}" ;; esac
+        ;;
+    "ps -a --filter"* | "ps --filter"*)
+        # One line (image=<image> dir=<working_dir label>) per container of the
+        # project asked for in the filter. STUB_CONTAINERS: project=directory,
+        # space separated. The image is the project's entry in STUB_CONTAINER_IMAGES
+        # (project=image), a memry-server image by default. STUB_PS_STATUS makes
+        # the command fail. The projects in STUB_STOPPED_PROJECTS (space
+        # separated) have only stopped containers: `docker ps -a` lists them,
+        # a plain `docker ps` does not.
+        [ -z "${STUB_PS_STATUS:-}" ] || exit "$STUB_PS_STATUS"
+        if [ "${2:-}" = -a ]; then project="${4#label=com.docker.compose.project=}"; else project="${3#label=com.docker.compose.project=}"; fi
+        if [ "${2:-}" != -a ]; then
+            case " ${STUB_STOPPED_PROJECTS:-} " in *" ${project} "*) exit 0 ;; esac
+            # STUB_APP_STOPPED_PROJECTS: only postgres runs, so a plain
+            # `docker ps` lists the project unless it also filters for the app.
+            if [ "${5:-}" = label=com.docker.compose.service=app ]; then
+                case " ${STUB_APP_STOPPED_PROJECTS:-} " in *" ${project} "*) exit 0 ;; esac
+                # STUB_ONEOFF_PROJECTS: only a `compose run` app container runs,
+                # so the app filter lists it unless one-off containers are excluded.
+                if [ "${7:-}" = label=com.docker.compose.oneoff=False ]; then
+                    case " ${STUB_ONEOFF_PROJECTS:-} " in *" ${project} "*) exit 0 ;; esac
+                fi
+            fi
+        fi
+        image="ghcr.io/mrtheroi/memry-server:0.18.1"
+        for entry in ${STUB_CONTAINER_IMAGES:-}; do
+            [ "${entry%%=*}" = "$project" ] && image="${entry#*=}"
+        done
+        for entry in ${STUB_CONTAINERS:-}; do
+            [ "${entry%%=*}" = "$project" ] && echo "image=${image} dir=${entry#*=}"
+        done
         ;;
     "volume inspect"*)
         [ "${3:-}" = "${STUB_EXISTING_VOLUME:-}" ] && exit 0
@@ -192,7 +245,9 @@ setup_test() {
     unset STUB_DAEMON_STATUS STUB_COMPOSE_VERSION STUB_COMPOSE_STATUS STUB_PULL_STATUS \
         STUB_IMAGE_STATUS STUB_TOKEN STUB_UP_STATUS STUB_MEMRY_VERSION STUB_SETUP_STATUS \
         STUB_CURL_FAIL STUB_VOLUME_STATUS STUB_EXISTING_VOLUME STUB_CLOCK_STEP STUB_PUBLISHED_PORT \
-        STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_NO_TOKEN STUB_CONTEXT_HOST STUB_REPO_DIGESTS STUB_IMAGE_ID STUB_TAG_STATUS
+        STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_NO_TOKEN STUB_CONTEXT_HOST STUB_REPO_DIGESTS STUB_IMAGE_ID STUB_TAG_STATUS \
+        STUB_VOLUMES STUB_CONTAINERS STUB_UNLABELED_VOLUMES STUB_STOPPED_PROJECTS STUB_APP_STOPPED_PROJECTS STUB_ONEOFF_PROJECTS STUB_COMPOSE_PROJECT \
+        STUB_CONTAINER_IMAGES STUB_VOLUME_LS_STATUS STUB_PS_STATUS STUB_CREATED_AT
     stub_docker
     stub_curl
     stub_memry
@@ -206,7 +261,8 @@ run_install() {
     stub_value=""
     for stub_var in STUB_LOG STUB_SOURCE STUB_DAEMON_STATUS STUB_COMPOSE_VERSION STUB_COMPOSE_STATUS \
         STUB_PULL_STATUS STUB_IMAGE_STATUS STUB_TOKEN STUB_NO_TOKEN STUB_VOLUME_STATUS \
-        STUB_EXISTING_VOLUME STUB_PUBLISHED_PORT STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_CONTEXT_HOST STUB_REPO_DIGESTS STUB_IMAGE_ID STUB_TAG_STATUS; do
+        STUB_EXISTING_VOLUME STUB_PUBLISHED_PORT STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_CONTEXT_HOST STUB_REPO_DIGESTS STUB_IMAGE_ID STUB_TAG_STATUS STUB_VOLUMES STUB_CONTAINERS STUB_UNLABELED_VOLUMES STUB_STOPPED_PROJECTS STUB_APP_STOPPED_PROJECTS STUB_ONEOFF_PROJECTS STUB_COMPOSE_PROJECT \
+        STUB_CONTAINER_IMAGES STUB_VOLUME_LS_STATUS STUB_PS_STATUS STUB_CREATED_AT; do
         eval "stub_value=\${$stub_var-}"
         printf "%s='%s'; export %s\n" "$stub_var" "$stub_value" "$stub_var"
     done > "${STUBS}/docker.env"
@@ -232,6 +288,17 @@ run_install() {
         ${STUB_REPO_DIGESTS:+STUB_REPO_DIGESTS="$STUB_REPO_DIGESTS"} \
         ${STUB_IMAGE_ID:+STUB_IMAGE_ID="$STUB_IMAGE_ID"} \
         ${STUB_TAG_STATUS:+STUB_TAG_STATUS="$STUB_TAG_STATUS"} \
+        ${STUB_VOLUMES:+STUB_VOLUMES="$STUB_VOLUMES"} \
+        ${STUB_CONTAINERS:+STUB_CONTAINERS="$STUB_CONTAINERS"} \
+        ${STUB_UNLABELED_VOLUMES:+STUB_UNLABELED_VOLUMES="$STUB_UNLABELED_VOLUMES"} \
+        ${STUB_STOPPED_PROJECTS:+STUB_STOPPED_PROJECTS="$STUB_STOPPED_PROJECTS"} \
+        ${STUB_APP_STOPPED_PROJECTS:+STUB_APP_STOPPED_PROJECTS="$STUB_APP_STOPPED_PROJECTS"} \
+        ${STUB_ONEOFF_PROJECTS:+STUB_ONEOFF_PROJECTS="$STUB_ONEOFF_PROJECTS"} \
+        ${STUB_COMPOSE_PROJECT:+STUB_COMPOSE_PROJECT="$STUB_COMPOSE_PROJECT"} \
+        ${STUB_CONTAINER_IMAGES:+STUB_CONTAINER_IMAGES="$STUB_CONTAINER_IMAGES"} \
+        ${STUB_VOLUME_LS_STATUS:+STUB_VOLUME_LS_STATUS="$STUB_VOLUME_LS_STATUS"} \
+        ${STUB_PS_STATUS:+STUB_PS_STATUS="$STUB_PS_STATUS"} \
+        ${STUB_CREATED_AT:+STUB_CREATED_AT="$STUB_CREATED_AT"} \
         ${STUB_CONTEXT_HOST:+STUB_CONTEXT_HOST="$STUB_CONTEXT_HOST"} \
         ${STUB_CLOCK_STEP:+STUB_CLOCK_STEP="$STUB_CLOCK_STEP"} \
         ${MEMRY_VERSION_OVERRIDE:+MEMRY_VERSION="$MEMRY_VERSION_OVERRIDE"} \
@@ -949,6 +1016,271 @@ test_the_local_readiness_probe_ignores_proxy_variables() {
     assert_status 0
     assert_log_contains "--noproxy * "
     assert_log_contains "http://localhost:8000/up"
+}
+
+test_doctor_reports_when_there_are_no_memry_volumes() {
+    run_install --doctor
+    assert_status 0
+    assert_output_contains "No memry database volumes found."
+    assert_log_not_contains "compose up"
+    assert_log_not_contains "docker pull"
+    assert_log_not_contains "compose run"
+}
+
+test_doctor_lists_a_volume_whose_project_runs_a_memry_image_as_a_memry_install() {
+    mkdir -p "${T}/work"
+    STUB_VOLUMES="memry-abc_postgres-data" STUB_CONTAINERS="memry-abc=${T}/work"
+    run_install --doctor
+    assert_status 0
+    assert_output_contains "memry-abc_postgres-data"
+    assert_output_contains "project: memry-abc"
+    assert_output_contains "created: 2025-01-02T03:04:05Z"
+    assert_output_contains "status: memry install at ${T}/work"
+    assert_output_not_contains "no longer exists"
+    assert_log_not_contains "volume rm"
+}
+
+test_doctor_lists_a_volume_without_containers_as_stopped_or_unconfirmed_and_never_prints_rm() {
+    STUB_VOLUMES="old-1234_postgres-data"
+    run_install --doctor
+    assert_status 0
+    assert_output_contains "old-1234_postgres-data"
+    assert_output_contains "status: stopped or unconfirmed (no containers)"
+    assert_output_contains "docker compose down"
+    assert_output_not_contains "memry install at"
+    assert_output_not_contains "docker volume rm"
+    assert_output_not_contains "orphaned"
+}
+
+test_doctor_marks_a_volume_whose_containers_use_other_images_as_not_memry() {
+    STUB_VOLUMES="shop_postgres-data" STUB_CONTAINERS="shop=${T}/shop"
+    STUB_CONTAINER_IMAGES="shop=postgres:16-alpine"
+    run_install --doctor
+    assert_status 0
+    assert_output_contains "status: not memry (containers use other images)"
+    assert_output_not_contains "memry install at"
+    assert_output_not_contains "docker volume rm"
+}
+
+test_doctor_says_when_the_directory_of_a_memry_install_no_longer_exists() {
+    STUB_VOLUMES="gone-9_postgres-data" STUB_CONTAINERS="gone-9=${T}/deleted"
+    run_install --doctor
+    assert_status 0
+    assert_output_contains "status: memry install at ${T}/deleted (the directory no longer exists)"
+}
+
+test_doctor_lists_the_containers_of_each_project_and_ends_with_the_dir_hint() {
+    STUB_VOLUMES="shop_postgres-data" STUB_CONTAINERS="shop=${T}/shop"
+    STUB_CONTAINER_IMAGES="shop=postgres:16-alpine"
+    run_install --doctor
+    assert_status 0
+    assert_output_contains "container: postgres:16-alpine in ${T}/shop"
+    assert_output_contains "To check an install directory, run the doctor with --dir <directory>."
+}
+
+test_doctor_fails_when_docker_volume_ls_fails() {
+    STUB_VOLUME_LS_STATUS=1 STUB_VOLUMES="memry-abc_postgres-data"
+    run_install --doctor
+    assert_status 1
+    assert_output_contains "could not list the Docker volumes"
+    assert_output_not_contains "No memry database volumes found."
+}
+
+test_doctor_fails_when_docker_ps_fails() {
+    STUB_PS_STATUS=1 STUB_VOLUMES="memry-abc_postgres-data"
+    run_install --doctor
+    assert_status 1
+    assert_output_contains "could not list the containers of the project memry-abc"
+}
+
+# An install directory whose .env names the Compose project.
+make_install_dir() {
+    mkdir -p "$DIR"
+    printf 'COMPOSE_PROJECT_NAME=%s\nDB_PASSWORD=secret\n' "$1" > "${DIR}/.env"
+}
+
+test_doctor_dir_reports_a_stopped_install_with_its_data_intact_and_how_to_start_it() {
+    make_install_dir myproj-1
+    STUB_VOLUMES="myproj-1_postgres-data other_postgres-data"
+    run_install --doctor --dir "$DIR"
+    assert_status 0
+    assert_output_contains ".env: present"
+    assert_output_contains "myproj-1_postgres-data"
+    assert_output_not_contains "other_postgres-data"
+    assert_output_contains "Stopped: the data is intact."
+    assert_output_contains "cd ${DIR} && docker compose up -d"
+    assert_output_not_contains "docker volume rm"
+    assert_log_not_contains "volume rm"
+}
+
+test_doctor_dir_with_a_missing_env_and_the_hashed_volume_offers_restore_or_rm_with_a_warning() {
+    mkdir -p "$DIR"
+    hashed="$(cd "$DIR" && pwd)"
+    base="$(basename "$hashed" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '-' | tr -s '-' | sed -e 's/^-*//' -e 's/-*$//')"
+    project="${base}-$(printf '%s' "$hashed" | cksum | cut -d ' ' -f 1)"
+    STUB_VOLUMES="${project}_postgres-data other_postgres-data"
+    run_install --doctor --dir "$DIR"
+    assert_status 0
+    assert_output_contains ".env: missing"
+    assert_output_contains "volume: ${project}_postgres-data"
+    assert_output_contains "Restore that .env"
+    assert_output_contains "docker volume rm ${project}_postgres-data"
+    assert_output_contains "removes every memory in it and cannot be undone"
+    assert_output_not_contains "other_postgres-data"
+    assert_output_not_contains "docker compose up -d"
+    assert_log_not_contains "volume rm"
+}
+
+test_doctor_dir_finds_a_legacy_volume_named_after_the_default_directory_project() {
+    mkdir -p "$DIR"
+    STUB_VOLUMES="memry_postgres-data"
+    run_install --doctor --dir "$DIR"
+    assert_status 0
+    assert_output_contains ".env: missing"
+    assert_output_contains "volume: memry_postgres-data"
+    assert_log_not_contains "volume rm"
+}
+
+test_doctor_dir_never_suggests_deleting_an_ambiguous_legacy_volume() {
+    mkdir -p "$DIR"
+    STUB_VOLUMES="memry_postgres-data"
+    run_install --doctor --dir "$DIR"
+    assert_status 0
+    assert_output_contains "volume: memry_postgres-data"
+    assert_output_contains "may be this install's"
+    assert_output_contains "Restore that .env"
+    assert_output_contains "ownership cannot be proven"
+    assert_output_not_contains "docker volume rm"
+    assert_log_not_contains "volume rm"
+}
+
+test_doctor_dir_says_when_this_install_has_no_volume() {
+    STUB_VOLUMES="other_postgres-data"
+    run_install --doctor --dir "$DIR"
+    assert_status 0
+    assert_output_contains "No database volume of this install exists"
+    assert_output_not_contains "docker volume rm"
+    assert_output_not_contains "other_postgres-data"
+    assert_log_not_contains "volume rm"
+    [ ! -e "$DIR" ] || fail "the doctor created the directory"
+}
+
+test_doctor_dir_reports_a_healthy_install() {
+    make_install_dir myproj-1
+    STUB_VOLUMES="myproj-1_postgres-data" STUB_CONTAINERS="myproj-1=${DIR}"
+    run_install --doctor --dir "$DIR"
+    assert_status 0
+    assert_output_contains "Healthy"
+    assert_output_not_contains "docker volume rm"
+    assert_log_not_contains "volume rm"
+}
+
+test_doctor_dir_reports_stopped_when_its_containers_exist_but_none_is_running() {
+    make_install_dir myproj-1
+    STUB_VOLUMES="myproj-1_postgres-data" STUB_CONTAINERS="myproj-1=${DIR}" STUB_STOPPED_PROJECTS="myproj-1"
+    run_install --doctor --dir "$DIR"
+    assert_status 0
+    assert_output_contains "Stopped: the data is intact."
+    assert_output_contains "cd ${DIR} && docker compose up -d"
+    assert_output_not_contains "Healthy"
+}
+
+test_doctor_dir_reports_stopped_when_only_postgres_is_running() {
+    make_install_dir myproj-1
+    STUB_VOLUMES="myproj-1_postgres-data" STUB_CONTAINERS="myproj-1=${DIR}" STUB_APP_STOPPED_PROJECTS="myproj-1"
+    run_install --doctor --dir "$DIR"
+    assert_status 0
+    assert_output_contains "Stopped: the data is intact."
+    assert_output_not_contains "Healthy"
+}
+
+test_doctor_dir_reports_stopped_when_only_a_one_off_app_container_runs() {
+    make_install_dir myproj-1
+    STUB_VOLUMES="myproj-1_postgres-data" STUB_CONTAINERS="myproj-1=${DIR}" STUB_ONEOFF_PROJECTS="myproj-1"
+    run_install --doctor --dir "$DIR"
+    assert_status 0
+    assert_output_contains "Stopped: the data is intact."
+    assert_output_not_contains "Healthy"
+}
+
+test_doctor_dir_canonicalizes_a_relative_path_to_a_missing_directory_like_the_installer() {
+    # The installer hashes the absolute path of the directory it creates.
+    here="$(cd "$T" && pwd -P)"
+    project="memry-$(printf '%s' "${here}/memry" | cksum | cut -d ' ' -f 1)"
+    STUB_VOLUMES="${project}_postgres-data"
+    cd "$T" || return 1
+    run_install --doctor --dir ./memry
+    cd "$ROOT" || return 1
+    assert_status 0
+    assert_output_contains "Install directory: ${here}/memry"
+    assert_output_contains "volume: ${project}_postgres-data"
+    [ ! -e "${T}/memry" ] || fail "the doctor created the directory"
+}
+
+test_doctor_dir_asks_compose_for_the_project_name_of_an_interpolated_env() {
+    mkdir -p "$DIR"
+    # shellcheck disable=SC2016 # the ${...} is literal: Compose interpolates it
+    printf 'PROJECT_NAME=shop\nCOMPOSE_PROJECT_NAME=${PROJECT_NAME:-x}\n' > "${DIR}/.env"
+    : > "${DIR}/docker-compose.yml"
+    STUB_VOLUMES="x_postgres-data" STUB_COMPOSE_PROJECT="x"
+    run_install --doctor --dir "$DIR"
+    assert_status 0
+    assert_output_contains "volume: x_postgres-data"
+    assert_output_not_contains "could not be confirmed"
+    assert_log_contains "docker compose config"
+}
+
+test_doctor_dir_falls_back_to_the_env_and_says_the_project_name_is_unconfirmed_when_compose_fails() {
+    make_install_dir myproj-1
+    STUB_VOLUMES="myproj-1_postgres-data"
+    run_install --doctor --dir "$DIR"
+    assert_status 0
+    assert_output_contains "volume: myproj-1_postgres-data"
+    assert_output_contains "could not be confirmed with Compose"
+}
+
+test_doctor_dir_still_refuses_the_other_install_options() {
+    run_install --doctor --dir "$DIR" --port 9000
+    assert_status 2
+    assert_output_contains "--doctor cannot be combined with --port"
+}
+
+test_doctor_never_removes_a_volume() {
+    STUB_VOLUMES="old-1234_postgres-data gone-9_postgres-data" STUB_CONTAINERS="gone-9=${T}/deleted"
+    run_install --doctor
+    assert_status 0
+    assert_log_not_contains "volume rm"
+    assert_log_not_contains "compose down"
+}
+
+test_doctor_cannot_be_combined_with_install_options() {
+    run_install --doctor --email you@example.com
+    assert_status 2
+    assert_output_contains "--doctor cannot be combined with --email"
+    assert_log_not_contains "docker"
+}
+
+test_help_documents_doctor() {
+    run_install --help
+    assert_status 0
+    assert_output_contains "--doctor"
+}
+
+test_doctor_needs_neither_curl_nor_an_email() {
+    rm -f "${STUBS}/curl"
+    run_install --doctor
+    assert_status 0
+}
+
+test_doctor_derives_the_project_of_an_unlabeled_volume_from_its_name() {
+    mkdir -p "${T}/work"
+    STUB_VOLUMES="legacy_postgres-data" STUB_UNLABELED_VOLUMES="legacy_postgres-data" STUB_CONTAINERS="=${T}/work"
+    run_install --doctor
+    assert_status 0
+    assert_output_contains "project: legacy"
+    assert_output_contains "status: stopped or unconfirmed (no containers)"
+    assert_output_not_contains "memry install at"
+    assert_log_not_contains "com.docker.compose.project= "
 }
 
 # --- run --------------------------------------------------------------------
