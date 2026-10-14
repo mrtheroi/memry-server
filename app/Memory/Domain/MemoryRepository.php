@@ -43,4 +43,19 @@ interface MemoryRepository
      * The system context moves the rows of every team.
      */
     public function moveToProject(AccessContext $context, string $from, string $to): int;
+
+    /**
+     * Dashboard reads. Besides the tenant filter they hide personal-scope memories from everyone but their author.
+     * Newest update first; ties break on the id so the order is stable.
+     *
+     * @throws InvalidCursor when the cursor was not issued by this query
+     */
+    public function pageVisible(AccessContext $context, ?string $project, ?string $type, ?string $cursor, int $perPage): MemoryPage;
+
+    public function findVisible(AccessContext $context, int $id): ?Observation;
+
+    /**
+     * @return list<Observation>
+     */
+    public function searchVisible(AccessContext $context, string $query, int $limit, ?string $project = null): array;
 }
