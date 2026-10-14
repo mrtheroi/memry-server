@@ -164,10 +164,33 @@ expand_tilde() {
     esac
 }
 
+# canonical_dir <existing directory>: its absolute path, the one the installer
+# hashes into the project name.
+canonical_dir() {
+    (cd "$1" && pwd)
+}
+
+# canonical_dir_or_missing <path>: the same absolute path for a directory that
+# may not exist, without creating it. A missing directory is its canonical
+# parent plus its name; with no parent either, the path made absolute with the
+# "." segments removed.
+canonical_dir_or_missing() {
+    if [ -d "$1" ]; then canonical_dir "$1"; return; fi
+    trimmed="${1%/}"
+    parent="$(dirname "$trimmed")"
+    if [ -d "$parent" ]; then
+        parent="$(canonical_dir "$parent")"
+        case "$parent" in /) printf '/%s' "$(basename "$trimmed")" ;; *) printf '%s/%s' "$parent" "$(basename "$trimmed")" ;; esac
+        return
+    fi
+    case "$trimmed" in /*) absolute="$trimmed" ;; *) absolute="$(pwd)/${trimmed}" ;; esac
+    printf '%s' "$absolute" | sed -e 's|/\(\./\)\{1,\}|/|g' -e 's|/\.$||' -e 's|//*|/|g'
+}
+
 download_files() {
     expand_tilde
     mkdir -p "$DIR"
-    DIR="$(cd "$DIR" && pwd)"
+    DIR="$(canonical_dir "$DIR")"
     # The directory as it can be pasted into a shell, for the printed commands.
     QDIR="$(shell_quote "$DIR")"
     [ -f "${DIR}/docker-compose.yml" ] || fetch docker-compose.yml "${DIR}/docker-compose.yml"
@@ -589,36 +612,52 @@ doctor() {
 doctor_dir() {
     expand_tilde
     # Nothing is created here: a missing directory is only reported.
-    if [ -d "$DIR" ]; then
-        DIR="$(cd "$DIR" && pwd)"
-    else
-        case "$DIR" in /*) ;; *) DIR="$(pwd)/${DIR}" ;; esac
-    fi
+    DIR="$(canonical_dir_or_missing "$DIR")"
     QDIR="$(shell_quote "$DIR")"
     all_volumes="$(docker volume ls --format '{{.Name}}')" \
         || die "could not list the Docker volumes: docker volume ls failed."
     env_file="${DIR}/.env"
+    unconfirmed=0
     if [ -f "$env_file" ]; then
-        project="$(env_get COMPOSE_PROJECT_NAME "$env_file")"
-        # Without the key an install uses Compose's default project.
-        [ -n "$project" ] || project="$(default_project_name)"
+        # Compose resolves interpolation and its defaults exactly: ask it, with
+        # the installer's isolated environment. The top-level "name:" of the
+        # resolved config (a nested "name:" is indented) is the project.
+        project="$(compose config 2>/dev/null | sed -n 's/^name:[[:space:]]*//p' | head -n 1 | tr -d "\"'")" || project=""
+        if [ -z "$project" ]; then
+            project="$(env_get COMPOSE_PROJECT_NAME "$env_file")"
+            # Without the key an install uses Compose's default project.
+            [ -n "$project" ] || project="$(default_project_name)"
+            unconfirmed=1
+        fi
         projects="$project"
     else
         projects="$(project_name) $(default_project_name)"
     fi
     say "Install directory: ${DIR}"
     if [ -f "$env_file" ]; then say ".env: present"; else say ".env: missing"; fi
+    if [ "$unconfirmed" = 1 ]; then
+        say "project: ${project} (could not be confirmed with Compose; read from .env)"
+    fi
     found_volumes=""
+    hashed_found=""
+    legacy_found=""
     container_count=0
+    running_count=0
     checked=""
     for project in $projects; do
         volume="${project}_postgres-data"
         checked="${checked:+${checked}, }${volume}"
         if printf '%s\n' "$all_volumes" | grep -Fxq -- "$volume"; then
             found_volumes="${found_volumes} ${volume}"
+            if [ "$project" = "$(project_name)" ]; then hashed_found="$volume"; else legacy_found="$volume"; fi
         fi
         project_containers "$project"
         [ -z "$CONTAINERS" ] || container_count=$((container_count + 1))
+        # Only running containers make an install healthy: `docker ps -a` also
+        # lists the ones stopped with `docker compose stop`.
+        running="$(docker ps --filter "label=com.docker.compose.project=${project}" --format '{{.ID}}')" \
+            || die "could not list the running containers of the project ${project}: docker ps failed."
+        [ -z "$running" ] || running_count=$((running_count + 1))
     done
     for volume in $found_volumes; do
         say "volume: ${volume}"
@@ -632,20 +671,26 @@ doctor_dir() {
         say "volume uses the password of the old .env. Choose one:"
         say ""
         say "  1. Restore that .env (it holds APP_KEY and DB_PASSWORD), then run the installer again."
-        say "  2. Only if you do not want the data, delete the volume:"
-        for volume in $found_volumes; do
-            say "         docker volume rm ${volume}"
-        done
-        say "     This removes every memory in it and cannot be undone."
+        if [ -n "$hashed_found" ]; then
+            say "  2. Only if you do not want the data, delete the volume:"
+            say "         docker volume rm ${hashed_found}"
+            say "     This removes every memory in it and cannot be undone."
+        fi
+        if [ -n "$legacy_found" ]; then
+            say ""
+            say "${legacy_found} is named after the directory only, so it may be this install's,"
+            say "but the same name can belong to another installation in a directory with the"
+            say "same name. Deleting it is not suggested: ownership cannot be proven."
+        fi
         say ""
         say "If the volume belongs to another installation in a directory with the same name,"
         say "install into a directory with another name."
-    elif [ "$container_count" -eq 0 ]; then
+    elif [ "$running_count" -eq 0 ]; then
         say "Stopped: the data is intact. Start it with:"
         say ""
         say "    cd ${QDIR} && docker compose up -d"
     else
-        say "Healthy: .env, the database volume and the containers are all present. Nothing to do."
+        say "Healthy: .env, the database volume and running containers are all present. Nothing to do."
     fi
     say "The doctor never deletes anything."
 }

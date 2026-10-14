@@ -84,6 +84,15 @@ case "$*" in
         echo "${STUB_APP_IMAGE:-$(sed -n 's/^MEMRY_IMAGE="*\([^" ]*\).*/\1/p' .env | tail -n 1)}"
         echo "postgres:16-alpine"
         ;;
+    "compose config")
+        # The resolved project: its name is STUB_COMPOSE_PROJECT. Without it the
+        # command fails, as with a missing docker-compose.yml.
+        [ -n "${STUB_COMPOSE_PROJECT:-}" ] || exit 1
+        echo "name: ${STUB_COMPOSE_PROJECT}"
+        echo "services:"
+        echo "  db:"
+        echo "    name: not-the-project"
+        ;;
     "compose port app 8000")
         # The port Compose published: STUB_PUBLISHED_PORT, or the digits of
         # APP_PORT in .env.
@@ -111,14 +120,19 @@ case "$*" in
         case "${4:-}" in *CreatedAt*) echo "${STUB_CREATED_AT:-2025-01-02T03:04:05Z}"; exit 0 ;; esac
         case " ${STUB_UNLABELED_VOLUMES:-} " in *" ${5} "*) echo "" ;; *) echo "${5%_postgres-data}" ;; esac
         ;;
-    "ps -a --filter"*)
+    "ps -a --filter"* | "ps --filter"*)
         # One line (image=<image> dir=<working_dir label>) per container of the
         # project asked for in the filter. STUB_CONTAINERS: project=directory,
         # space separated. The image is the project's entry in STUB_CONTAINER_IMAGES
         # (project=image), a memry-server image by default. STUB_PS_STATUS makes
-        # the command fail.
+        # the command fail. The projects in STUB_STOPPED_PROJECTS (space
+        # separated) have only stopped containers: `docker ps -a` lists them,
+        # a plain `docker ps` does not.
         [ -z "${STUB_PS_STATUS:-}" ] || exit "$STUB_PS_STATUS"
-        project="${4#label=com.docker.compose.project=}"
+        if [ "${2:-}" = -a ]; then project="${4#label=com.docker.compose.project=}"; else project="${3#label=com.docker.compose.project=}"; fi
+        if [ "${2:-}" != -a ]; then
+            case " ${STUB_STOPPED_PROJECTS:-} " in *" ${project} "*) exit 0 ;; esac
+        fi
         image="ghcr.io/mrtheroi/memry-server:0.18.1"
         for entry in ${STUB_CONTAINER_IMAGES:-}; do
             [ "${entry%%=*}" = "$project" ] && image="${entry#*=}"
@@ -222,7 +236,7 @@ setup_test() {
         STUB_IMAGE_STATUS STUB_TOKEN STUB_UP_STATUS STUB_MEMRY_VERSION STUB_SETUP_STATUS \
         STUB_CURL_FAIL STUB_VOLUME_STATUS STUB_EXISTING_VOLUME STUB_CLOCK_STEP STUB_PUBLISHED_PORT \
         STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_NO_TOKEN STUB_CONTEXT_HOST STUB_REPO_DIGESTS STUB_IMAGE_ID STUB_TAG_STATUS \
-        STUB_VOLUMES STUB_CONTAINERS STUB_UNLABELED_VOLUMES \
+        STUB_VOLUMES STUB_CONTAINERS STUB_UNLABELED_VOLUMES STUB_STOPPED_PROJECTS STUB_COMPOSE_PROJECT \
         STUB_CONTAINER_IMAGES STUB_VOLUME_LS_STATUS STUB_PS_STATUS STUB_CREATED_AT
     stub_docker
     stub_curl
@@ -237,7 +251,7 @@ run_install() {
     stub_value=""
     for stub_var in STUB_LOG STUB_SOURCE STUB_DAEMON_STATUS STUB_COMPOSE_VERSION STUB_COMPOSE_STATUS \
         STUB_PULL_STATUS STUB_IMAGE_STATUS STUB_TOKEN STUB_NO_TOKEN STUB_VOLUME_STATUS \
-        STUB_EXISTING_VOLUME STUB_PUBLISHED_PORT STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_CONTEXT_HOST STUB_REPO_DIGESTS STUB_IMAGE_ID STUB_TAG_STATUS STUB_VOLUMES STUB_CONTAINERS STUB_UNLABELED_VOLUMES \
+        STUB_EXISTING_VOLUME STUB_PUBLISHED_PORT STUB_LOCAL_IMAGE STUB_APP_IMAGE STUB_CONTEXT_HOST STUB_REPO_DIGESTS STUB_IMAGE_ID STUB_TAG_STATUS STUB_VOLUMES STUB_CONTAINERS STUB_UNLABELED_VOLUMES STUB_STOPPED_PROJECTS STUB_COMPOSE_PROJECT \
         STUB_CONTAINER_IMAGES STUB_VOLUME_LS_STATUS STUB_PS_STATUS STUB_CREATED_AT; do
         eval "stub_value=\${$stub_var-}"
         printf "%s='%s'; export %s\n" "$stub_var" "$stub_value" "$stub_var"
@@ -267,6 +281,8 @@ run_install() {
         ${STUB_VOLUMES:+STUB_VOLUMES="$STUB_VOLUMES"} \
         ${STUB_CONTAINERS:+STUB_CONTAINERS="$STUB_CONTAINERS"} \
         ${STUB_UNLABELED_VOLUMES:+STUB_UNLABELED_VOLUMES="$STUB_UNLABELED_VOLUMES"} \
+        ${STUB_STOPPED_PROJECTS:+STUB_STOPPED_PROJECTS="$STUB_STOPPED_PROJECTS"} \
+        ${STUB_COMPOSE_PROJECT:+STUB_COMPOSE_PROJECT="$STUB_COMPOSE_PROJECT"} \
         ${STUB_CONTAINER_IMAGES:+STUB_CONTAINER_IMAGES="$STUB_CONTAINER_IMAGES"} \
         ${STUB_VOLUME_LS_STATUS:+STUB_VOLUME_LS_STATUS="$STUB_VOLUME_LS_STATUS"} \
         ${STUB_PS_STATUS:+STUB_PS_STATUS="$STUB_PS_STATUS"} \
@@ -1110,7 +1126,19 @@ test_doctor_dir_finds_a_legacy_volume_named_after_the_default_directory_project(
     assert_status 0
     assert_output_contains ".env: missing"
     assert_output_contains "volume: memry_postgres-data"
-    assert_output_contains "docker volume rm memry_postgres-data"
+    assert_log_not_contains "volume rm"
+}
+
+test_doctor_dir_never_suggests_deleting_an_ambiguous_legacy_volume() {
+    mkdir -p "$DIR"
+    STUB_VOLUMES="memry_postgres-data"
+    run_install --doctor --dir "$DIR"
+    assert_status 0
+    assert_output_contains "volume: memry_postgres-data"
+    assert_output_contains "may be this install's"
+    assert_output_contains "Restore that .env"
+    assert_output_contains "ownership cannot be proven"
+    assert_output_not_contains "docker volume rm"
     assert_log_not_contains "volume rm"
 }
 
@@ -1133,6 +1161,52 @@ test_doctor_dir_reports_a_healthy_install() {
     assert_output_contains "Healthy"
     assert_output_not_contains "docker volume rm"
     assert_log_not_contains "volume rm"
+}
+
+test_doctor_dir_reports_stopped_when_its_containers_exist_but_none_is_running() {
+    make_install_dir myproj-1
+    STUB_VOLUMES="myproj-1_postgres-data" STUB_CONTAINERS="myproj-1=${DIR}" STUB_STOPPED_PROJECTS="myproj-1"
+    run_install --doctor --dir "$DIR"
+    assert_status 0
+    assert_output_contains "Stopped: the data is intact."
+    assert_output_contains "cd ${DIR} && docker compose up -d"
+    assert_output_not_contains "Healthy"
+}
+
+test_doctor_dir_canonicalizes_a_relative_path_to_a_missing_directory_like_the_installer() {
+    # The installer hashes the absolute path of the directory it creates.
+    here="$(cd "$T" && pwd -P)"
+    project="memry-$(printf '%s' "${here}/memry" | cksum | cut -d ' ' -f 1)"
+    STUB_VOLUMES="${project}_postgres-data"
+    cd "$T" || return 1
+    run_install --doctor --dir ./memry
+    cd "$ROOT" || return 1
+    assert_status 0
+    assert_output_contains "Install directory: ${here}/memry"
+    assert_output_contains "volume: ${project}_postgres-data"
+    [ ! -e "${T}/memry" ] || fail "the doctor created the directory"
+}
+
+test_doctor_dir_asks_compose_for_the_project_name_of_an_interpolated_env() {
+    mkdir -p "$DIR"
+    # shellcheck disable=SC2016 # the ${...} is literal: Compose interpolates it
+    printf 'PROJECT_NAME=shop\nCOMPOSE_PROJECT_NAME=${PROJECT_NAME:-x}\n' > "${DIR}/.env"
+    : > "${DIR}/docker-compose.yml"
+    STUB_VOLUMES="x_postgres-data" STUB_COMPOSE_PROJECT="x"
+    run_install --doctor --dir "$DIR"
+    assert_status 0
+    assert_output_contains "volume: x_postgres-data"
+    assert_output_not_contains "could not be confirmed"
+    assert_log_contains "docker compose config"
+}
+
+test_doctor_dir_falls_back_to_the_env_and_says_the_project_name_is_unconfirmed_when_compose_fails() {
+    make_install_dir myproj-1
+    STUB_VOLUMES="myproj-1_postgres-data"
+    run_install --doctor --dir "$DIR"
+    assert_status 0
+    assert_output_contains "volume: myproj-1_postgres-data"
+    assert_output_contains "could not be confirmed with Compose"
 }
 
 test_doctor_dir_still_refuses_the_other_install_options() {

@@ -55,11 +55,11 @@ To check one install directory, which is the case when `.env` was lost:
 curl -fsSL https://raw.githubusercontent.com/mrtheroi/memry-server/v0.18.1/install.sh | sh -s -- --doctor --dir <directory>
 ```
 
-It finds the database volumes of that install with the installer's own rules (the `COMPOSE_PROJECT_NAME` in its `.env`; without a `.env`, the project name with the directory checksum and the plain directory-name project), then reports whether `.env`, the volume and containers exist:
+It finds the database volumes of that install with the installer's own rules (the project name Compose itself resolves from its `.env`, falling back to the `COMPOSE_PROJECT_NAME` in it and saying so when Compose cannot confirm it; without a `.env`, the project name with the directory checksum and the plain directory-name project), then reports whether `.env`, the volume and containers exist:
 
-- healthy: nothing to do;
-- stopped: the data is intact; start it with `cd <directory> && docker compose up -d`;
-- `.env` missing but the volume exists: restore the old `.env` (it holds `APP_KEY` and `DB_PASSWORD`) and run the installer again, or, only if you do not want the data, `docker volume rm <volume>`, which removes every memory in it and cannot be undone. This is the only case where the doctor prints a delete command, because the volume is proven to belong to that directory;
+- healthy: nothing to do (the install has running containers);
+- stopped: the data is intact, and no container of the install is running (they may exist stopped, for example after `docker compose stop`); start it with `cd <directory> && docker compose up -d`;
+- `.env` missing but the volume exists: restore the old `.env` (it holds `APP_KEY` and `DB_PASSWORD`) and run the installer again, or, only if you do not want the data, `docker volume rm <volume>`, which removes every memory in it and cannot be undone. The delete command is printed only for the volume named after the directory path (with its checksum), which is proven to belong to that directory. A volume named only after the directory name may be this install's, but the same name can belong to another install, so the doctor reports it, offers the restore, and suggests no deletion because ownership cannot be proven;
 - no volume for that install: it says so.
 
 Without `--dir` the doctor only lists, for information:
