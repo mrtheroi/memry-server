@@ -1221,14 +1221,30 @@ test_doctor_dir_refuses_a_dot_segment_in_a_missing_path_before_any_docker_call()
     run_install --doctor --dir "${T}/gone/../memry"
     assert_status 2
     assert_output_contains "Pass the install directory as the installer printed it: an absolute path without . or .. segments."
-    assert_log_not_contains "docker volume"
-    assert_log_not_contains "docker ps"
+    assert_log_not_contains "docker"
 }
 
 test_doctor_dir_refuses_a_missing_path_made_only_of_dot_segments() {
     run_install --doctor --dir /missing/..
     assert_status 2
     assert_output_contains "without . or .. segments."
+    assert_log_not_contains "docker"
+}
+
+test_doctor_dir_refuses_an_empty_segment_in_a_missing_path() {
+    run_install --doctor --dir "${T}/gone//memry"
+    assert_status 2
+    assert_output_contains "without . or .. segments."
+    assert_log_not_contains "docker"
+}
+
+test_doctor_dir_accepts_a_trailing_slash_on_a_missing_path() {
+    project="memry-$(printf '%s' "${T}/gone/memry" | cksum | cut -d ' ' -f 1)"
+    STUB_VOLUMES="${project}_postgres-data"
+    run_install --doctor --dir "${T}/gone/memry/"
+    assert_status 0
+    assert_output_contains "Install directory: ${T}/gone/memry"
+    assert_output_contains "volume: ${project}_postgres-data"
 }
 
 test_doctor_dir_accepts_a_missing_absolute_path_without_dot_segments_whose_parent_is_missing() {
@@ -1274,6 +1290,8 @@ test_doctor_dir_does_not_search_a_volume_for_an_interpolated_name_when_compose_f
     assert_output_not_contains "docker volume rm"
     assert_output_not_contains "volume: "
     assert_output_not_contains "No database volume"
+    assert_output_contains "containers: not checked (project name unresolved)"
+    assert_output_not_contains "containers: none"
 }
 
 test_doctor_dir_still_refuses_the_other_install_options() {

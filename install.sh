@@ -604,20 +604,28 @@ doctor() {
     say "The doctor never deletes anything."
 }
 
+# require_printed_dir_path: a directory that does not exist must be given as
+# the installer printed it. After one leading "./" and one trailing "/", it may
+# have no empty, "." or ".." segment: the installer's pwd folds them, and a
+# symlink changes where ".." leads, so the doctor refuses to guess.
+require_printed_dir_path() {
+    expand_tilde
+    [ ! -d "$DIR" ] || return 0
+    printed="${DIR#./}"
+    printed="${printed%/}"
+    case "$printed" in /*) ;; *) printed="/${printed}" ;; esac
+    case "${printed}/" in
+        */./* | */../* | *//*) usage_error "Pass the install directory as the installer printed it: an absolute path without . or .. segments." ;;
+    esac
+}
+
 # doctor_dir: proves what belongs to ONE install directory (read only). The
 # volume names come from the installer's own logic (the project in .env, or
 # for a missing .env the hashed and the legacy directory-name projects), so a
 # volume found here is that install's, never another stack's.
 doctor_dir() {
     expand_tilde
-    # Nothing is created here: a missing directory is only reported. Its dot
-    # segments cannot be folded safely (a symlink changes where ".." leads), so
-    # they are refused before anything else runs.
-    if [ ! -d "$DIR" ]; then
-        case "/${DIR#./}/" in
-            */./* | */../*) usage_error "Pass the install directory as the installer printed it: an absolute path without . or .. segments." ;;
-        esac
-    fi
+    # Nothing is created here: a missing directory is only reported.
     DIR="$(canonical_dir_or_missing "$DIR")"
     QDIR="$(shell_quote "$DIR")"
     all_volumes="$(docker volume ls --format '{{.Name}}')" \
@@ -679,7 +687,11 @@ doctor_dir() {
     for volume in $found_volumes; do
         say "volume: ${volume}"
     done
-    say "containers: $([ "$container_count" -gt 0 ] && echo present || echo none)"
+    if [ "$unresolved" = 1 ]; then
+        say "containers: not checked (project name unresolved)"
+    else
+        say "containers: $([ "$container_count" -gt 0 ] && echo present || echo none)"
+    fi
     say ""
     if [ "$unresolved" = 1 ]; then
         say "No volume claim is made for this install. Restore docker-compose.yml from the"
@@ -773,6 +785,7 @@ project_status() {
 
 main() {
     parse_args "$@"
+    if [ "$DOCTOR" = 1 ] && [ "$DIR_GIVEN" = 1 ]; then require_printed_dir_path; fi
     preflight
     if [ "$DOCTOR" = 1 ]; then
         if [ "$DIR_GIVEN" = 1 ]; then doctor_dir; else doctor; fi
