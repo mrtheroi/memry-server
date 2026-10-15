@@ -17,23 +17,29 @@ use App\Http\Controllers\Dashboard\SearchMemoriesController;
 use App\Http\Controllers\Dashboard\ShowMemoryController;
 use Illuminate\Support\Facades\Route;
 
-Route::get('/context', ContextController::class)->middleware(['auth:sanctum', 'throttle:mcp']);
-
 Route::post('/auth/code', LoginCodeController::class)->middleware('throttle:auth-code');
 Route::post('/auth/token', TokenController::class)->middleware('throttle:auth-token');
-Route::delete('/auth/token', RevokeTokenController::class)->middleware(['auth:sanctum', 'throttle:auth-tokens']);
-Route::get('/auth/tokens', ListTokensController::class)->middleware(['auth:sanctum', 'throttle:auth-tokens']);
-Route::delete('/auth/tokens/{id}', RevokeOneTokenController::class)->whereNumber('id')->middleware(['auth:sanctum', 'throttle:auth-tokens']);
-
 Route::post('/session', [SessionController::class, 'store'])->middleware('throttle:auth-token');
-Route::delete('/session', [SessionController::class, 'destroy'])->middleware(['auth:sanctum', 'throttle:auth-tokens']);
-Route::get('/me', MeController::class)->middleware(['auth:sanctum', 'throttle:mcp']);
 
-Route::delete('/account', DeleteAccountController::class)->middleware(['auth:sanctum', 'throttle:mcp']);
+// Every token-authenticated route lives in this group, so a new route inherits the full-access
+// ability check: a token limited to `usage:write` (the OTLP exporter's) can reach nothing else.
+// Sessions pass (TransientToken can do anything); only the OTLP ingest route may sit outside it.
+Route::middleware(['auth:sanctum', 'abilities:*'])->group(function () {
+    Route::get('/context', ContextController::class)->middleware('throttle:mcp');
 
-Route::get('/projects', ListProjectsController::class)->middleware(['auth:sanctum', 'throttle:dashboard']);
-Route::get('/stats', MemoryStatsController::class)->middleware(['auth:sanctum', 'throttle:dashboard']);
-Route::get('/memories', ListMemoriesController::class)->middleware(['auth:sanctum', 'throttle:dashboard']);
-Route::get('/memories/search', SearchMemoriesController::class)->middleware(['auth:sanctum', 'throttle:dashboard']);
-Route::get('/memories/{id}', ShowMemoryController::class)->whereNumber('id')->middleware(['auth:sanctum', 'throttle:dashboard']);
-Route::delete('/memories/{id}', DeleteMemoryController::class)->whereNumber('id')->middleware(['auth:sanctum', 'throttle:dashboard']);
+    Route::delete('/auth/token', RevokeTokenController::class)->middleware('throttle:auth-tokens');
+    Route::get('/auth/tokens', ListTokensController::class)->middleware('throttle:auth-tokens');
+    Route::delete('/auth/tokens/{id}', RevokeOneTokenController::class)->whereNumber('id')->middleware('throttle:auth-tokens');
+
+    Route::delete('/session', [SessionController::class, 'destroy'])->middleware('throttle:auth-tokens');
+    Route::get('/me', MeController::class)->middleware('throttle:mcp');
+
+    Route::delete('/account', DeleteAccountController::class)->middleware('throttle:mcp');
+
+    Route::get('/projects', ListProjectsController::class)->middleware('throttle:dashboard');
+    Route::get('/stats', MemoryStatsController::class)->middleware('throttle:dashboard');
+    Route::get('/memories', ListMemoriesController::class)->middleware('throttle:dashboard');
+    Route::get('/memories/search', SearchMemoriesController::class)->middleware('throttle:dashboard');
+    Route::get('/memories/{id}', ShowMemoryController::class)->whereNumber('id')->middleware('throttle:dashboard');
+    Route::delete('/memories/{id}', DeleteMemoryController::class)->whereNumber('id')->middleware('throttle:dashboard');
+});
