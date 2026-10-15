@@ -7,9 +7,9 @@ use App\Models\User;
 use App\Team\Domain\AccessContext;
 use App\Team\Domain\Role;
 use App\Team\Infrastructure\Persistence\TeamUserRecord;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
 

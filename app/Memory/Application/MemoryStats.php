@@ -5,8 +5,8 @@ namespace App\Memory\Application;
 use App\Memory\Domain\MemoryActivity;
 use App\Memory\Domain\MemoryStatistics;
 use App\Team\Domain\AccessContext;
-use DateInterval;
 use Carbon\CarbonImmutable;
+use DateInterval;
 
 class MemoryStats
 {
