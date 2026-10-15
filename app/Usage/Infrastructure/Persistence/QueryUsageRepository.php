@@ -14,6 +14,7 @@ final class QueryUsageRepository implements UsageRepository
             return 0;
         }
 
+        // An absent optional attribute is stored as '' (see the migration); the domain keeps null.
         $now = now();
 
         // One INSERT ... ON CONFLICT DO NOTHING for the whole batch (at most 5000 rows x 11 columns, under
@@ -23,9 +24,9 @@ final class QueryUsageRepository implements UsageRepository
             'user_id' => $userId,
             'metric' => $point->metric->value,
             'model' => $point->model,
-            'token_type' => $point->tokenType,
-            'query_source' => $point->querySource,
-            'session_id' => $point->sessionId,
+            'token_type' => $point->tokenType ?? '',
+            'query_source' => $point->querySource ?? '',
+            'session_id' => $point->sessionId ?? '',
             'start_unix_nano' => $point->startUnixNano,
             'end_unix_nano' => $point->endUnixNano,
             'value' => $point->value,

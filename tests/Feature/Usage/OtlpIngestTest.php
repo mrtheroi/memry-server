@@ -241,3 +241,15 @@ test('the otlp rate limit is 120 requests per minute per user', function () {
     app('auth')->forgetGuards();
     $this->withToken($token)->postJson('/api/otlp/v1/metrics', [])->assertStatus(429);
 });
+
+test('absent optional attributes are stored as empty strings so the unique index covers them', function () {
+    $token = ingestToken(User::factory()->create());
+    $bare = otlp(sumMetric('claude_code.cost.usage', [[
+        'attributes' => attrs(['model' => 'm']), 'startTimeUnixNano' => '1', 'timeUnixNano' => '2', 'asDouble' => 1.5,
+    ]]));
+
+    $this->withToken($token)->postJson('/api/otlp/v1/metrics', $bare)->assertOk();
+
+    $row = DB::table('usage_points')->sole();
+    expect($row->token_type)->toBe('')->and($row->query_source)->toBe('')->and($row->session_id)->toBe('');
+});

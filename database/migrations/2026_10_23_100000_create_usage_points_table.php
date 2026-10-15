@@ -15,9 +15,9 @@ return new class extends Migration
             $table->foreignId('user_id')->constrained()->cascadeOnDelete();
             $table->string('metric', 10);
             $table->string('model', 200);
-            $table->string('token_type', 20)->nullable();
-            $table->string('query_source', 200)->nullable();
-            $table->string('session_id', 200)->nullable();
+            $table->string('token_type', 20)->default('');
+            $table->string('query_source', 200)->default('');
+            $table->string('session_id', 200)->default('');
             // Unix nanoseconds: they fit a signed bigint until the year 2262.
             $table->bigInteger('start_unix_nano');
             $table->bigInteger('end_unix_nano');
@@ -28,9 +28,10 @@ return new class extends Migration
         });
 
         // One row per series and window: a retried export hits this and is skipped by ON CONFLICT DO NOTHING.
-        // NULLS NOT DISTINCT (PostgreSQL 15+) makes the nullable columns compare equal, so uniqueness holds for them too.
+        // The optional attributes are NOT NULL DEFAULT '' (an absent one is stored as ''), because NULLs never
+        // collide in a unique index on PostgreSQL 14.
         DB::statement('CREATE UNIQUE INDEX usage_points_series_window_unique ON usage_points '
-            .'(user_id, metric, model, token_type, query_source, session_id, start_unix_nano, end_unix_nano) NULLS NOT DISTINCT');
+            .'(user_id, metric, model, token_type, query_source, session_id, start_unix_nano, end_unix_nano)');
     }
 
     public function down(): void
