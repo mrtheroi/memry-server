@@ -445,3 +445,50 @@ test('valid empty exports are still accepted', function (string $body) {
 
     expect(usageTotals()['rows'])->toBe(0);
 })->with(['{}', '{"resourceMetrics":[]}', '{"resourceMetrics":[{"scopeMetrics":[]}]}']);
+
+/** The canonical series input of the cost point in claudeCodeExport(): the metric plus its sorted attributes. */
+function costSeriesInput(): string
+{
+    return json_encode(['claude_code.cost.usage', [
+        'model' => 'claude-opus-4-7', 'query_source' => 'main', 'session.id' => 'sess-1', 'user.email' => 'someone@else.test',
+    ]], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+}
+
+function storedCostSeriesHash(): string
+{
+    return DB::table('usage_points')->where('metric', 'cost')->value('series_hash');
+}
+
+test('the stored series hash is keyed, never the plain sha256 of its input', function () {
+    $this->withToken(ingestToken(User::factory()->create()))->postJson('/api/otlp/v1/metrics', claudeCodeExport())->assertOk();
+
+    expect(storedCostSeriesHash())->toMatch('/^[0-9a-f]{64}$/')
+        ->not->toBe(hash('sha256', costSeriesInput()));
+});
+
+test('the series key is derived from the app key, never the app key itself', function () {
+    $this->withToken(ingestToken(User::factory()->create()))->postJson('/api/otlp/v1/metrics', claudeCodeExport())->assertOk();
+
+    expect(storedCostSeriesHash())->not->toBe(hash_hmac('sha256', costSeriesInput(), (string) config('app.key')));
+});
+
+test('two app keys give the same export two different series hashes', function () {
+    $user = User::factory()->create();
+
+    $this->withToken(ingestToken($user))->postJson('/api/otlp/v1/metrics', claudeCodeExport())->assertOk();
+    $first = storedCostSeriesHash();
+
+    DB::table('usage_points')->delete();
+    config(['app.key' => 'base64:'.base64_encode(random_bytes(32))]);
+    app('auth')->forgetGuards();
+    $this->withToken(ingestToken($user))->postJson('/api/otlp/v1/metrics', claudeCodeExport())->assertOk();
+
+    expect(storedCostSeriesHash())->not->toBe($first);
+});
+
+test('the stored series hash neither equals nor contains the sha256 of an email in the attributes', function () {
+    $this->withToken(ingestToken(User::factory()->create()))->postJson('/api/otlp/v1/metrics', claudeCodeExport())->assertOk();
+
+    expect(storedCostSeriesHash())->not->toBe(hash('sha256', 'someone@else.test'))
+        ->not->toContain(substr(hash('sha256', 'someone@else.test'), 0, 16));
+});
