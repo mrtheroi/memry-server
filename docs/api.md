@@ -76,12 +76,12 @@ A second kind, the **usage token**, carries only `usage:write`. It exists to be 
 
 | Endpoint | Status | Meaning |
 | --- | --- | --- |
-| `POST /api/auth/usage-token` | `201` | `{"token": "id\|plain"}`: a new token named `memry-usage`, bound to the caller's team, with abilities `["usage:write"]`. Requires a full-access token or a session |
+| `POST /api/auth/usage-token` | `201` | `{"id": 42, "token": "id\|plain"}`: `id` is the new token's numeric id (the same number as the prefix of `token`); a new token named `memry-usage`, bound to the caller's team, with abilities `["usage:write"]`. Requires a full-access token or a session |
 | | `401` | Missing, invalid or expired token |
 | | `403` | The caller is a usage token |
 | | `429` | Rate limit exceeded for the user |
 
-The call **rotates**: any previous `memry-usage` token of the user is deleted in the same transaction, so a user has at most one. The plaintext is shown only in this response. The usage token follows the same idle expiry as any token (30 days without use).
+The call **only issues**: earlier `memry-usage` tokens of the user stay valid, so a client that fails to store the new token still has a working export. Revoke the old ones with `DELETE /api/auth/usage-tokens` (below). The plaintext is shown only in this response. The usage token follows the same idle expiry as any token (30 days without use).
 
 Tokens expire after 30 days without use (`MEMRY_TOKEN_IDLE_DAYS`); an expired token answers `401 {"message": "Unauthenticated."}`, like any invalid token. `php artisan memory:prune-tokens` (scheduled daily) removes them.
 

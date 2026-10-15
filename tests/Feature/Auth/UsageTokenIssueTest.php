@@ -2,7 +2,6 @@
 
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\DB;
 
 uses(RefreshDatabase::class);
 
@@ -16,9 +15,10 @@ test('it issues a team-bound usage token limited to usage:write', function () {
 
     $response = $this->withToken(fullTokenFor($user))->postJson('/api/auth/usage-token')
         ->assertCreated()
-        ->assertJsonStructure(['token']);
+        ->assertJsonStructure(['id', 'token']);
 
     [$id] = explode('|', $response->json('token'), 2);
+    expect($response->json('id'))->toBe((int) $id);
     $row = $user->tokens()->findOrFail($id);
 
     expect($row->name)->toBe('memry-usage')
@@ -29,7 +29,7 @@ test('it issues a team-bound usage token limited to usage:write', function () {
     $this->withToken($response->json('token'))->getJson('/api/me')->assertForbidden();
 });
 
-test('it rotates: the previous usage token is deleted and other tokens are kept', function () {
+test('issuing a new usage token keeps the previous one valid and other tokens untouched', function () {
     $user = User::factory()->create();
     $other = User::factory()->create();
     $full = fullTokenFor($user);
@@ -39,12 +39,13 @@ test('it rotates: the previous usage token is deleted and other tokens are kept'
     app('auth')->forgetGuards();
     $second = $this->withToken($full)->postJson('/api/auth/usage-token')->json('token');
 
-    $usage = $user->tokens()->where('name', 'memry-usage')->get();
-    expect($usage)->toHaveCount(1)
-        ->and($usage->sole()->getKey())->toBe((int) explode('|', $second)[0])
-        ->and($user->tokens()->count())->toBe(2)
+    expect($user->tokens()->where('name', 'memry-usage')->count())->toBe(2)
+        ->and($user->tokens()->count())->toBe(3)
         ->and($first)->not->toBe($second)
         ->and($other->tokens()->whereKey($otherUsage->accessToken->id)->exists())->toBeTrue();
+
+    app('auth')->forgetGuards();
+    $this->withToken($first)->postJson('/api/otlp/v1/metrics', ['resourceMetrics' => []])->assertSuccessful();
 });
 
 test('a usage token cannot mint another usage token', function () {
@@ -93,25 +94,4 @@ test('it answers 403 and creates nothing when the token team has no membership f
         ->assertJsonStructure(['message']);
 
     expect($user->tokens()->where('name', 'memry-usage')->exists())->toBeFalse();
-});
-
-test('it locks the user row before deleting and inserting so rotations serialize', function () {
-    $user = User::factory()->create();
-    $full = fullTokenFor($user);
-
-    $queries = [];
-    DB::listen(function ($query) use (&$queries) {
-        $queries[] = strtolower($query->sql);
-    });
-
-    $this->withToken($full)->postJson('/api/auth/usage-token')->assertCreated();
-
-    $position = fn (callable $match) => collect($queries)->search($match);
-    $lock = $position(fn ($sql) => str_contains($sql, 'from "users"') && str_contains($sql, 'for update'));
-    $delete = $position(fn ($sql) => str_starts_with($sql, 'delete from "personal_access_tokens"'));
-    $insert = $position(fn ($sql) => str_starts_with($sql, 'insert into "personal_access_tokens"'));
-
-    expect($lock)->not->toBeFalse()
-        ->and($lock)->toBeLessThan($delete)
-        ->and($delete)->toBeLessThan($insert);
 });
