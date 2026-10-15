@@ -32,10 +32,10 @@ class EloquentMemoryStatistics implements MemoryStatistics
     private function daily(AccessContext $context, DateTimeImmutable $from, DateTimeImmutable $to): array
     {
         return $this->inRange($context, $from, $to)
-            ->selectRaw('created_at::date as day, count(*) as memories')
+            ->selectRaw('created_at::date as day, count(*) as memories, count(*) filter (where type = \'session_summary\') as session_summaries')
             ->groupByRaw('created_at::date')
             ->get()
-            ->mapWithKeys(fn ($row) => [$row->day => ['memories' => (int) $row->memories, 'session_summaries' => 0]])
+            ->mapWithKeys(fn ($row) => [$row->day => ['memories' => (int) $row->memories, 'session_summaries' => (int) $row->session_summaries]])
             ->all();
     }
 

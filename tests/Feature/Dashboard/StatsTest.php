@@ -72,3 +72,17 @@ test('daily counts memories on the UTC day of created_at', function () {
         ->and($daily->sum())->toBe(5)
         ->and($daily->keys()->all())->toBe($daily->keys()->sort()->values()->all());
 });
+
+test('daily counts session summaries separately and memories include them', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+    memoryOn($ada, '2026-10-14 08:00:00', 'session_summary');
+    memoryOn($ada, '2026-10-14 09:00:00', 'session_summary');
+    memoryOn($ada, '2026-10-14 10:00:00', 'decision');
+    memoryOn($ada, '2026-10-13 10:00:00', 'decision');
+
+    $daily = collect(readAs(bearerOf($ada), '/api/stats')->assertOk()->json('data.daily'))->keyBy('date');
+
+    expect($daily['2026-10-14'])->toBe(['date' => '2026-10-14', 'memories' => 3, 'session_summaries' => 2])
+        ->and($daily['2026-10-13'])->toBe(['date' => '2026-10-13', 'memories' => 1, 'session_summaries' => 0]);
+});
