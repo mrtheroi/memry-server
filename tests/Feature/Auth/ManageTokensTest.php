@@ -21,7 +21,7 @@ test('it lists only the caller tokens, marks the current one and exposes no secr
         ->and($rows[$other->accessToken->id])->toMatchArray(['name' => 'claude-code', 'current' => false])
         ->and($rows[$other->accessToken->id]['last_used_at'])->toBe(now()->subDays(2)->toJSON())
         ->and($rows[$other->accessToken->id]['expires_at'])->toBe(now()->subDays(2)->addDays(30)->toJSON())
-        ->and(array_keys($rows[$current->accessToken->id]))->toBe(['id', 'name', 'created_at', 'last_used_at', 'expires_at', 'current']);
+        ->and(array_keys($rows[$current->accessToken->id]))->toBe(['id', 'name', 'abilities', 'created_at', 'last_used_at', 'expires_at', 'current']);
     expect($response->getContent())->not->toContain($current->plainTextToken)->not->toContain('"token"');
 });
 
