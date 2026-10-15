@@ -46,15 +46,24 @@ class OtlpMetricsController extends Controller
 
         $record($context, $parsed->points);
 
-        if ($parsed->rejectedNonDelta === 0) {
+        $messages = array_filter([
+            $parsed->rejectedNonDelta > 0
+                ? "memry expects delta temporality; {$parsed->rejectedNonDelta} cumulative data points were skipped. "
+                    .'Set OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta.'
+                : null,
+            $parsed->rejectedInvalid > 0
+                ? "{$parsed->rejectedInvalid} data points with an invalid value were skipped; values must be non-negative numbers."
+                : null,
+        ]);
+
+        if ($messages === []) {
             return response()->json((object) []);
         }
 
         // OTLP ExportMetricsServiceResponse; rejectedDataPoints is an int64, so a JSON string.
         return response()->json(['partialSuccess' => [
-            'rejectedDataPoints' => (string) $parsed->rejectedNonDelta,
-            'errorMessage' => "memry expects delta temporality; {$parsed->rejectedNonDelta} cumulative data points were skipped. "
-                .'Set OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta.',
+            'rejectedDataPoints' => (string) ($parsed->rejectedNonDelta + $parsed->rejectedInvalid),
+            'errorMessage' => implode(' ', $messages),
         ]]);
     }
 

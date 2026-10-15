@@ -286,3 +286,35 @@ test('the same export sent through two teams of one user is stored once per team
     expect(usageTotals()['rows'])->toBe(8)
         ->and(DB::table('usage_points')->where('team_id', $teamB)->count())->toBe(4);
 });
+
+test('invalid values are skipped and reported, never a server error', function () {
+    $user = User::factory()->create();
+    $export = otlp(
+        sumMetric('claude_code.token.usage', [
+            [...tokenPoint('input', '1'), 'asInt' => 'abc'],
+            [...tokenPoint('output', '1'), 'asInt' => [1]],
+            [...tokenPoint('cacheRead', '1'), 'asInt' => '-5'],
+            tokenPoint('cacheCreation', '7'),
+        ]),
+        sumMetric('claude_code.cost.usage', [
+            ['attributes' => attrs(['model' => 'm']), 'startTimeUnixNano' => '1', 'timeUnixNano' => '2', 'asDouble' => 'NaN'],
+            ['attributes' => attrs(['model' => 'm']), 'startTimeUnixNano' => '1', 'timeUnixNano' => '2', 'asDouble' => 'Infinity'],
+        ]),
+        sumMetric('claude_code.token.usage', [tokenPoint('input', '1')], 2),
+    );
+
+    $this->withToken(ingestToken($user))->postJson('/api/otlp/v1/metrics', $export)
+        ->assertOk()
+        ->assertJsonPath('partialSuccess.rejectedDataPoints', '6')
+        ->assertJsonPath('partialSuccess.errorMessage', 'memry expects delta temporality; 1 cumulative data points were skipped. Set OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta. 5 data points with an invalid value were skipped; values must be non-negative numbers.');
+
+    expect(usageTotals())->toBe(['rows' => 1, 'tokens' => '7.000000', 'cost' => '0']);
+});
+
+test('the int64 maximum is stored without overflow', function () {
+    $this->withToken(ingestToken(User::factory()->create()))
+        ->postJson('/api/otlp/v1/metrics', otlp(sumMetric('claude_code.token.usage', [tokenPoint('input', '9223372036854775807')])))
+        ->assertOk()->assertExactJson([]);
+
+    expect((string) DB::table('usage_points')->sole()->value)->toBe('9223372036854775807.000000');
+});

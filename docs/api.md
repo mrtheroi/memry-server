@@ -100,11 +100,15 @@ Tokens expire after 30 days without use (`MEMRY_TOKEN_IDLE_DAYS`); an expired to
 
 Only **delta** data points (`aggregationTemporality` 1) are stored, which is the Claude Code default. Cumulative points are skipped and reported in the response (below). Zero values are skipped, `model`, `query_source` and `session.id` are cut to 200 characters, and a missing `model` is stored as `unknown`. Points whose time window is not valid int64 nanoseconds are skipped.
 
-**Idempotent.** Exporters retry. Each point is stored once per series (user, metric, model, token type, query source, session) and time window (`startTimeUnixNano`, `timeUnixNano`): a unique index plus `INSERT ... ON CONFLICT DO NOTHING` makes a retried or duplicated batch a no-op, so totals never double count. A different window of the same series is a new row.
+**Values.** A point's value is `asInt` (a decimal int64 string, or a JSON integer) or `asDouble` (a finite JSON number). Counters here are monotonic deltas, so a missing value, a non-numeric or out-of-int64-range `asInt`, an array or object, a negative number, `NaN`/`Infinity` (as strings) or a double of `1e30` or more is **invalid**. Invalid points are skipped, never a server error, and counted in `partialSuccess` (below). Values are stored as `numeric(38,6)`, so every int64 fits.
+
+**Series identity.** A series is the metric plus the **complete** attribute set of the data point (sorted by key, values normalized to strings, hashed with sha256 into `series_hash`), so points that differ in any attribute (`speed`, `effort`, `skill.name`, `mcp_server.name`, ...) are separate series and are never merged. `model`, `token_type`, `query_source` and `session_id` are also stored as columns for querying. Resource attributes are not part of the identity: they describe the exporter, are constant for it, and include `user.*` values that are never trusted.
+
+**Idempotent.** Exporters retry. Each point is stored once per team, user, series and time window (`startTimeUnixNano`, `timeUnixNano`): a unique index on `(team_id, user_id, metric, series_hash, start_unix_nano, end_unix_nano)` plus `INSERT ... ON CONFLICT DO NOTHING` makes a retried or duplicated batch a no-op, so totals never double count. A different window of the same series is a new row, and the same export sent with tokens of two teams is stored once per team.
 
 | Status | Meaning |
 | --- | --- |
-| `200` | `{}`, or `{"partialSuccess": {"rejectedDataPoints": "2", "errorMessage": "..."}}` when cumulative points were skipped |
+| `200` | `{}`, or `{"partialSuccess": {"rejectedDataPoints": "2", "errorMessage": "..."}}` when cumulative or invalid-value points were skipped (the rest of the request is stored) |
 | `400` | Not valid JSON, or not an OTLP metrics request (`{"message": "..."}`) |
 | `401` | Missing, invalid or expired token |
 | `403` | The token lacks `usage:write`, or has no team |

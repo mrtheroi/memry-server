@@ -166,3 +166,40 @@ it('normalizes attribute values of every OTLP type to strings in the identity', 
         ->and($withValue(['doubleValue' => 1.5]))->toBe($withValue(['stringValue' => '1.5']))
         ->and($withValue(['stringValue' => 'a']))->not->toBe($withValue(['stringValue' => 'b']));
 });
+
+it('rejects and counts data points with an invalid value instead of failing', function (array $value) {
+    $parsed = (new OtlpMetricsParser)(otlp(sumMetric('claude_code.token.usage', [
+        [...tokenPoint('input', '1'), 'asInt' => null, ...$value],
+        tokenPoint('output', '3'),
+    ])));
+
+    expect($parsed->points)->toHaveCount(1)
+        ->and($parsed->rejectedInvalid)->toBe(1)
+        ->and($parsed->rejectedNonDelta)->toBe(0);
+})->with([
+    'non numeric asInt' => [['asInt' => 'abc']],
+    'float string asInt' => [['asInt' => '1.5']],
+    'asInt array' => [['asInt' => [1]]],
+    'asInt object' => [['asInt' => ['a' => 1]]],
+    'asInt bool' => [['asInt' => true]],
+    'asInt beyond int64' => [['asInt' => '9223372036854775808']],
+    'negative asInt' => [['asInt' => '-5']],
+    'negative asDouble' => [['asInt' => null, 'asDouble' => -0.5]],
+    'NaN asDouble' => [['asInt' => null, 'asDouble' => 'NaN']],
+    'Infinity asDouble' => [['asInt' => null, 'asDouble' => 'Infinity']],
+    'string asDouble' => [['asInt' => null, 'asDouble' => '1.5']],
+    'huge asDouble' => [['asInt' => null, 'asDouble' => 1.0e300]],
+    'asDouble array' => [['asInt' => null, 'asDouble' => [1.5]]],
+    'no value at all' => [['asInt' => null]],
+]);
+
+it('accepts the int64 maximum, and an asInt given as a JSON number', function () {
+    $parsed = (new OtlpMetricsParser)(otlp(sumMetric('claude_code.token.usage', [
+        tokenPoint('input', '9223372036854775807'),
+        [...tokenPoint('output', '1'), 'asInt' => 42],
+    ])));
+
+    expect($parsed->points[0]->value)->toBe('9223372036854775807')
+        ->and($parsed->points[1]->value)->toBe('42')
+        ->and($parsed->rejectedInvalid)->toBe(0);
+});

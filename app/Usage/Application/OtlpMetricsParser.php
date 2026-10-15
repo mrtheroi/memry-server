@@ -27,6 +27,9 @@ final class OtlpMetricsParser
 
     public const MAX_POINTS = 5000;
 
+    // Keeps a double within numeric(38,6), which has 32 integer digits.
+    private const MAX_DOUBLE = 1.0e30;
+
     /** @param array<mixed> $payload */
     public function __invoke(array $payload): ParsedUsage
     {
@@ -36,6 +39,7 @@ final class OtlpMetricsParser
 
         $points = [];
         $rejected = 0;
+        $invalid = 0;
 
         foreach ($this->objects($payload, 'resourceMetrics') as $resource) {
             foreach ($this->objects($resource, 'scopeMetrics') as $scope) {
@@ -53,7 +57,18 @@ final class OtlpMetricsParser
                             continue;
                         }
 
-                        $point = $this->point($kind, $metric['name'], $dataPoint);
+                        $value = $this->value($dataPoint);
+                        if ($value === false) {
+                            $invalid++;
+
+                            continue;
+                        }
+
+                        if ($value === null) {
+                            continue;
+                        }
+
+                        $point = $this->point($kind, $metric['name'], $dataPoint, $value);
                         if ($point !== null) {
                             $points[] = $point;
                             count($points) <= self::MAX_POINTS || throw TooManyPoints::over(self::MAX_POINTS);
@@ -63,7 +78,7 @@ final class OtlpMetricsParser
             }
         }
 
-        return new ParsedUsage($points, $rejected);
+        return new ParsedUsage($points, $rejected, $invalid);
     }
 
     /**
@@ -84,13 +99,8 @@ final class OtlpMetricsParser
     }
 
     /** @param array<mixed> $dataPoint */
-    private function point(UsageMetric $kind, string $metricName, array $dataPoint): ?UsagePoint
+    private function point(UsageMetric $kind, string $metricName, array $dataPoint, string $value): ?UsagePoint
     {
-        $value = $this->value($dataPoint);
-        if ($value === null) {
-            return null;
-        }
-
         $start = $this->nanos($dataPoint['startTimeUnixNano'] ?? null);
         $end = $this->nanos($dataPoint['timeUnixNano'] ?? null);
         if ($start === null || $end === null) {
@@ -152,15 +162,33 @@ final class OtlpMetricsParser
     }
 
     /**
-     * The value as a decimal string, or null for a zero (nothing to count).
+     * The value of the data point's oneof (`asInt` or `asDouble`) as a decimal string; null for a zero
+     * (nothing to count); false when it is missing or not a valid monotonic delta: not a decimal int64
+     * string/int, not a finite number, negative, or too large for the numeric(38,6) column.
      *
      * @param  array<mixed>  $dataPoint
      */
-    private function value(array $dataPoint): ?string
+    private function value(array $dataPoint): string|false|null
     {
-        $value = isset($dataPoint['asInt'])
-            ? (string) $dataPoint['asInt']
-            : number_format((float) ($dataPoint['asDouble'] ?? 0), 6, '.', '');
+        if (($dataPoint['asInt'] ?? null) !== null) {
+            $raw = $dataPoint['asInt'];
+            $int = is_int($raw) || (is_string($raw) && preg_match('/^-?\d+$/', $raw) === 1)
+                ? filter_var($raw, FILTER_VALIDATE_INT)
+                : false;
+
+            return $int === false || $int < 0 ? false : ($int === 0 ? null : (string) $int);
+        }
+
+        $double = $dataPoint['asDouble'] ?? null;
+        if (! is_int($double) && ! is_float($double)) {
+            return false;
+        }
+
+        if (! is_finite($double) || $double < 0 || $double >= self::MAX_DOUBLE) {
+            return false;
+        }
+
+        $value = number_format($double, 6, '.', '');
 
         return (float) $value === 0.0 ? null : $value;
     }
