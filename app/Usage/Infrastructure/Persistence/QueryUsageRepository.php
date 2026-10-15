@@ -17,12 +17,13 @@ final class QueryUsageRepository implements UsageRepository
         // An absent optional attribute is stored as '' (see the migration); the domain keeps null.
         $now = now();
 
-        // One INSERT ... ON CONFLICT DO NOTHING for the whole batch (at most 5000 rows x 11 columns, under
+        // One INSERT ... ON CONFLICT DO NOTHING for the whole batch (at most 5000 rows x 12 columns, under
         // PostgreSQL's 65535 bind-parameter limit); the unique index drops the points already stored.
         return DB::table('usage_points')->insertOrIgnore(array_map(fn (UsagePoint $point) => [
             'team_id' => $teamId,
             'user_id' => $userId,
             'metric' => $point->metric->value,
+            'series_hash' => $point->seriesHash,
             'model' => $point->model,
             'token_type' => $point->tokenType ?? '',
             'query_source' => $point->querySource ?? '',

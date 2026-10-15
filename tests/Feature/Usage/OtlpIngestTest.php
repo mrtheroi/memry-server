@@ -253,3 +253,36 @@ test('absent optional attributes are stored as empty strings so the unique index
     $row = DB::table('usage_points')->sole();
     expect($row->token_type)->toBe('')->and($row->query_source)->toBe('')->and($row->session_id)->toBe('');
 });
+
+test('series that differ only by another attribute are all stored and summed', function () {
+    $token = ingestToken(User::factory()->create());
+    $point = fn (string $extraKey, string $extraValue) => [
+        'attributes' => attrs(['type' => 'input', 'model' => 'claude-opus-4-7', 'query_source' => 'main', 'session.id' => 's', $extraKey => $extraValue]),
+        'startTimeUnixNano' => '1', 'timeUnixNano' => '2', 'asInt' => '100',
+    ];
+    $export = otlp(sumMetric('claude_code.token.usage', [
+        $point('speed', 'fast'), $point('speed', 'normal'), $point('skill.name', 'tdd'), $point('skill.name', 'sdd'),
+    ]));
+
+    $this->withToken($token)->postJson('/api/otlp/v1/metrics', $export)->assertOk();
+    app('auth')->forgetGuards();
+    $this->withToken($token)->postJson('/api/otlp/v1/metrics', $export)->assertOk();
+
+    expect(usageTotals())->toBe(['rows' => 4, 'tokens' => '400.000000', 'cost' => '0']);
+});
+
+test('the same export sent through two teams of one user is stored once per team', function () {
+    $user = User::factory()->create();
+    $teamA = contextFor($user)->teamId;
+    $teamB = DB::table('teams')->insertGetId(['owner_id' => User::factory()->create()->id, 'slug' => 'team-b', 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('team_user')->insert(['team_id' => $teamB, 'user_id' => $user->id, 'role' => 'member', 'created_at' => now(), 'updated_at' => now()]);
+
+    foreach ([$teamA, $teamB] as $teamId) {
+        app('auth')->forgetGuards();
+        $token = $user->createTeamToken("usage-{$teamId}", $teamId, ['usage:write'])->plainTextToken;
+        $this->withToken($token)->postJson('/api/otlp/v1/metrics', claudeCodeExport())->assertOk();
+    }
+
+    expect(usageTotals()['rows'])->toBe(8)
+        ->and(DB::table('usage_points')->where('team_id', $teamB)->count())->toBe(4);
+});

@@ -133,3 +133,36 @@ it('accepts exactly 5000 points', function () {
 
     expect((new OtlpMetricsParser)(otlp(sumMetric('claude_code.token.usage', $points)))->points)->toHaveCount(5000);
 });
+
+it('hashes the whole attribute set of the data point as the series identity', function () {
+    $point = fn (array $extra, array $resource = ['service.name' => 'claude-code']) => [
+        'resourceMetrics' => [[
+            'resource' => ['attributes' => attrs($resource)],
+            'scopeMetrics' => [['metrics' => [sumMetric('claude_code.token.usage', [[
+                'attributes' => attrs(['type' => 'input', 'model' => 'm', ...$extra]),
+                'startTimeUnixNano' => '1', 'timeUnixNano' => '2', 'asInt' => '5',
+            ]])]]],
+        ]],
+    ];
+    $hash = fn (array $payload) => (new OtlpMetricsParser)($payload)->points[0]->seriesHash;
+
+    $base = $hash($point([]));
+
+    expect($base)->toMatch('/^[0-9a-f]{64}$/')
+        ->and($hash($point(['speed' => 'fast'])))->not->toBe($base)
+        ->and($hash($point(['skill.name' => 'tdd'])))->not->toBe($hash($point(['skill.name' => 'sdd'])))
+        ->and($hash($point(['speed' => 'fast', 'effort' => 'high'])))->toBe($hash($point(['effort' => 'high', 'speed' => 'fast'])))
+        ->and($hash($point([], ['user.email' => 'a@b.test'])))->toBe($base);
+});
+
+it('normalizes attribute values of every OTLP type to strings in the identity', function () {
+    $withValue = fn (array $value) => (new OtlpMetricsParser)(otlp(sumMetric('claude_code.token.usage', [[
+        'attributes' => [['key' => 'type', 'value' => ['stringValue' => 'input']], ['key' => 'flag', 'value' => $value]],
+        'startTimeUnixNano' => '1', 'timeUnixNano' => '2', 'asInt' => '5',
+    ]])))->points[0]->seriesHash;
+
+    expect($withValue(['intValue' => '7']))->toBe($withValue(['stringValue' => '7']))
+        ->and($withValue(['boolValue' => true]))->toBe($withValue(['stringValue' => 'true']))
+        ->and($withValue(['doubleValue' => 1.5]))->toBe($withValue(['stringValue' => '1.5']))
+        ->and($withValue(['stringValue' => 'a']))->not->toBe($withValue(['stringValue' => 'b']));
+});

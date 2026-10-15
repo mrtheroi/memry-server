@@ -53,7 +53,7 @@ final class OtlpMetricsParser
                             continue;
                         }
 
-                        $point = $this->point($kind, $dataPoint);
+                        $point = $this->point($kind, $metric['name'], $dataPoint);
                         if ($point !== null) {
                             $points[] = $point;
                             count($points) <= self::MAX_POINTS || throw TooManyPoints::over(self::MAX_POINTS);
@@ -84,7 +84,7 @@ final class OtlpMetricsParser
     }
 
     /** @param array<mixed> $dataPoint */
-    private function point(UsageMetric $kind, array $dataPoint): ?UsagePoint
+    private function point(UsageMetric $kind, string $metricName, array $dataPoint): ?UsagePoint
     {
         $value = $this->value($dataPoint);
         if ($value === null) {
@@ -99,7 +99,7 @@ final class OtlpMetricsParser
 
         $attributes = [];
         foreach ($this->objects($dataPoint, 'attributes') as $attribute) {
-            $attributes[$attribute['key'] ?? ''] = $attribute['value']['stringValue'] ?? null;
+            $attributes[(string) ($attribute['key'] ?? '')] = $this->attributeValue($attribute['value'] ?? null);
         }
 
         $tokenType = $attributes['type'] ?? null;
@@ -116,7 +116,39 @@ final class OtlpMetricsParser
             $start,
             $end,
             $value,
+            $this->seriesHash($metricName, $attributes),
         );
+    }
+
+    /**
+     * The identity of a series: the metric plus the COMPLETE attribute set of the data point, so two
+     * series that differ in any attribute (speed, skill.name, ...) are never collapsed. Resource
+     * attributes are left out on purpose: they describe the exporter, are constant for it, and carry
+     * `user.*` values that are never trusted; the user comes from the token.
+     *
+     * @param  array<string, string|null>  $attributes
+     */
+    private function seriesHash(string $metricName, array $attributes): string
+    {
+        ksort($attributes, SORT_STRING);
+
+        return hash('sha256', json_encode([$metricName, $attributes], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+    }
+
+    /** An OTLP AnyValue as a string: scalars by their JSON form, anything else as canonical JSON. */
+    private function attributeValue(mixed $value): ?string
+    {
+        if (! is_array($value) || $value === []) {
+            return null;
+        }
+
+        $scalar = $value['stringValue'] ?? $value['intValue'] ?? $value['doubleValue'] ?? $value['boolValue'] ?? null;
+
+        return match (true) {
+            is_bool($scalar) => $scalar ? 'true' : 'false',
+            is_scalar($scalar) => (string) $scalar,
+            default => json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+        };
     }
 
     /**
