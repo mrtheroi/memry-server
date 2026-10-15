@@ -81,3 +81,15 @@ test('a usage token expires after the idle window like any other token', functio
 
     $this->withToken($usage)->getJson('/api/me')->assertUnauthorized();
 });
+
+test('it answers 403 and creates nothing when the token team has no membership for the user', function () {
+    $user = User::factory()->create();
+    $strangerTeam = contextFor(User::factory()->create())->teamId;
+    $stale = $user->createTeamToken('memry-cli', $strangerTeam)->plainTextToken;
+
+    $this->withToken($stale)->postJson('/api/auth/usage-token')
+        ->assertForbidden()
+        ->assertJsonStructure(['message']);
+
+    expect($user->tokens()->where('name', 'memry-usage')->exists())->toBeFalse();
+});

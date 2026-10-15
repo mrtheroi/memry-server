@@ -12,6 +12,10 @@ class UsageTokenController extends Controller
 {
     public function __invoke(Request $request, AccessContext $context): JsonResponse
     {
+        if ($context->isDenied()) {
+            return response()->json(['message' => 'A team is required to issue a usage token.'], 403);
+        }
+
         $user = $request->user();
 
         // Rotation: delete and create in one transaction so a user never holds two usage tokens.
