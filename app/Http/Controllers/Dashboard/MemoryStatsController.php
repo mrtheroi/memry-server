@@ -14,7 +14,8 @@ class MemoryStatsController extends Controller
 
     public function __invoke(Request $request, MemoryStats $memoryStats, AccessContext $context): JsonResponse
     {
-        $input = $request->validate(['days' => ['nullable', 'integer', 'min:7', 'max:365']]);
+        // Only an omitted `days` defaults; a present but empty value is a 422, not a silent 30.
+        $input = $request->validate(['days' => ['sometimes', 'required', 'integer', 'min:7', 'max:365']]);
         $days = (int) ($input['days'] ?? self::DEFAULT_DAYS);
         $stats = $memoryStats($context, $days);
 

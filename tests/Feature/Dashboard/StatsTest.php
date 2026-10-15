@@ -21,7 +21,7 @@ test('days must be an integer from 7 to 365', function (mixed $days) {
     $ada = User::factory()->create();
 
     readAs(bearerOf($ada), '/api/stats?days='.$days)->assertUnprocessable()->assertJsonValidationErrors('days');
-})->with(['6', '366', '0', '-1', 'abc', '10.5']);
+})->with(['6', '366', '0', '-1', 'abc', '10.5', 'empty' => '', 'blank' => '%20%20']);
 
 test('with no memories the default range is 30 UTC days, zero-filled oldest first', function () {
     $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
