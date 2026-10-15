@@ -17,7 +17,7 @@ final class UsageReport
     /**
      * The caller's own usage on the acting team over the last $days UTC days, today included, with every day present.
      *
-     * @return array{days: int, from: string, to: string, daily: list<array{date: string, tokens: array{input: int, output: int, cacheRead: int, cacheCreation: int}, cost_usd: float}>, by_model: list<array{model: string, tokens: int, cost_usd: float}>, totals: array{tokens: int, cost_usd: float}}
+     * @return array{days: int, from: string, to: string, daily: list<array{date: string, tokens: array{input: int, output: int, cacheRead: int, cacheCreation: int}, cost_usd: string}>, by_model: list<array{model: string, tokens: int, cost_usd: string}>, totals: array{tokens: int, cost_usd: string}}
      */
     public function __invoke(AccessContext $context, int $days): array
     {
@@ -25,13 +25,13 @@ final class UsageReport
         $from = $to->sub(new DateInterval('P'.($days - 1).'D'));
         // Like the other dashboard reads, a caller with no team reads zeros; the system context is nobody's own usage.
         $summary = $context->isDenied() || $context->isSystem()
-            ? new UsageSummary([], [], ['tokens' => 0, 'cost_usd' => 0.0])
+            ? new UsageSummary([], [], ['tokens' => 0, 'cost_usd' => '0.000000'])
             : $this->usage->summary($context->teamId, $context->userId, $from, $to);
 
         $daily = [];
         for ($day = $from; $day <= $to; $day = $day->add(new DateInterval('P1D'))) {
             $key = $day->format('Y-m-d');
-            $daily[] = ['date' => $key] + ($summary->daily[$key] ?? ['tokens' => self::NO_TOKENS, 'cost_usd' => 0.0]);
+            $daily[] = ['date' => $key] + ($summary->daily[$key] ?? ['tokens' => self::NO_TOKENS, 'cost_usd' => '0.000000']);
         }
 
         return [

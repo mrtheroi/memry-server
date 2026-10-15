@@ -259,9 +259,9 @@ Rules:
 ```json
 {"data": {
   "days": 30, "from": "2026-09-15", "to": "2026-10-14",
-  "daily": [{"date": "2026-09-15", "tokens": {"input": 0, "output": 0, "cacheRead": 0, "cacheCreation": 0}, "cost_usd": 0}],
-  "by_model": [{"model": "claude-sonnet-4-6", "tokens": 9025, "cost_usd": 0.31}],
-  "totals": {"tokens": 9175, "cost_usd": 0.75}
+  "daily": [{"date": "2026-09-15", "tokens": {"input": 0, "output": 0, "cacheRead": 0, "cacheCreation": 0}, "cost_usd": "0.000000"}],
+  "by_model": [{"model": "claude-sonnet-4-6", "tokens": 9025, "cost_usd": "0.310000"}],
+  "totals": {"tokens": 9175, "cost_usd": "0.750000"}
 }}
 ```
 
@@ -272,7 +272,7 @@ Rules:
 - **`daily`** has one row per day of the window, oldest first, zero-filled. `tokens` holds the four known Claude Code token types.
 - **Unknown token types.** The ingest stores the `type` attribute as sent and currently drops token points whose type is not one of the four known ones, so today every stored token point is one of them. Should another type ever be stored, it is left out of `daily[].tokens` but still counted in `by_model[].tokens` and `totals.tokens`.
 - **`by_model`** sums tokens (every type) and cost per model within the window, ordered by tokens descending then model ascending. A model with only cost points appears with `tokens: 0`.
-- **`cost_usd`** is in US dollars, rounded to 6 decimals.
+- **`cost_usd`** is in US dollars, as an **exact decimal string** with exactly 6 decimals (`"10000000000.000001"`, zero is `"0.000000"`), taken straight from the database's `numeric` sum rounded to 6 decimals. It is a string, not a JSON number, because money is never passed through binary floating point: a float cannot hold a value such as `10000000000.000001` and would silently change it. Clients parse it for display (for example with `Number(...)` for a chart, accepting that rounding there, or a decimal library where exactness matters).
 - **One snapshot.** `daily`, `by_model` and `totals` come from a single SQL statement (`GROUP BY GROUPING SETS`), so they always agree: the per-type sums of `daily` plus any unknown types equal `totals.tokens`, and the `by_model` sums equal `totals`, even while new points arrive.
 - **No silent overflow.** A token sum that does not fit a 64-bit integer is an error (`500`), never a saturated number. The ingest limits (see [Values](#otlp-usage-ingest)) keep it out of reach through the API.
 

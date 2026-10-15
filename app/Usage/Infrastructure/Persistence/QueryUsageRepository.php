@@ -79,13 +79,13 @@ final class QueryUsageRepository implements UsageRepository
             // Only the four known token types are pivoted per day; tokens and by_model count every type.
             ($rows[self::DAY_ROW] ?? collect())->mapWithKeys(fn ($row) => [gmdate('Y-m-d', (int) $row->day * 86400) => [
                 'tokens' => array_combine(self::TOKEN_TYPES, array_map(fn (string $type) => $this->tokens($row->{$type}), self::TOKEN_TYPES)),
-                'cost_usd' => (float) $row->cost_usd,
+                'cost_usd' => (string) $row->cost_usd,
             ]])->all(),
             ($rows[self::MODEL_ROW] ?? collect())
-                ->map(fn ($row) => ['model' => $row->model, 'tokens' => $this->tokens($row->tokens), 'cost_usd' => (float) $row->cost_usd])
+                ->map(fn ($row) => ['model' => $row->model, 'tokens' => $this->tokens($row->tokens), 'cost_usd' => (string) $row->cost_usd])
                 ->values()
                 ->all(),
-            ['tokens' => $this->tokens($total->tokens), 'cost_usd' => (float) $total->cost_usd],
+            ['tokens' => $this->tokens($total->tokens), 'cost_usd' => (string) $total->cost_usd],
         );
     }
 

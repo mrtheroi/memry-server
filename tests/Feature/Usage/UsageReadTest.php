@@ -42,10 +42,10 @@ test('with no usage the default window is 30 UTC days, zero-filled oldest first'
         ->and($body['from'])->toBe('2026-09-15')
         ->and($body['to'])->toBe('2026-10-14')
         ->and($body['daily'])->toHaveCount(30)
-        ->and($body['daily'][0])->toEqual(['date' => '2026-09-15', 'tokens' => $zero, 'cost_usd' => 0.0])
-        ->and($body['daily'][29])->toEqual(['date' => '2026-10-14', 'tokens' => $zero, 'cost_usd' => 0.0])
+        ->and($body['daily'][0])->toBe(['date' => '2026-09-15', 'tokens' => $zero, 'cost_usd' => '0.000000'])
+        ->and($body['daily'][29])->toBe(['date' => '2026-10-14', 'tokens' => $zero, 'cost_usd' => '0.000000'])
         ->and($body['by_model'])->toBe([])
-        ->and($body['totals'])->toEqual(['tokens' => 0, 'cost_usd' => 0.0]);
+        ->and($body['totals'])->toBe(['tokens' => 0, 'cost_usd' => '0.000000']);
 });
 
 test('days sets the window, today included', function (int $days, string $from) {
@@ -75,6 +75,14 @@ function usagePoint(int $teamId, int $userId, string $endUtc, UsageMetric $metri
     )]);
 }
 
+/** An exact 6-decimal cost string as integer micro-dollars, so cost sums are compared without floats. */
+function micros(string $usd): int
+{
+    expect($usd)->toMatch('/^\\d+\\.\\d{6}$/');
+
+    return (int) str_replace('.', '', $usd);
+}
+
 function ownUsage(User $user, string $endUtc, UsageMetric $metric, string $value, ?string $tokenType = null, string $model = 'claude-opus-4-7'): void
 {
     usagePoint(contextFor($user)->teamId, $user->id, $endUtc, $metric, $value, $tokenType, $model);
@@ -96,7 +104,7 @@ test('daily sums tokens by type and cost on the UTC day of the point end time', 
 
     $daily = collect(readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data.daily'))->keyBy('date');
 
-    expect($daily['2026-10-14'])->toEqual(['date' => '2026-10-14', 'tokens' => ['input' => 120, 'output' => 7, 'cacheRead' => 9000, 'cacheCreation' => 300], 'cost_usd' => 0.042102])
+    expect($daily['2026-10-14'])->toBe(['date' => '2026-10-14', 'tokens' => ['input' => 120, 'output' => 7, 'cacheRead' => 9000, 'cacheCreation' => 300], 'cost_usd' => '0.042102'])
         ->and($daily['2026-10-13']['tokens'])->toBe(['input' => 0, 'output' => 5, 'cacheRead' => 0, 'cacheCreation' => 0])
         ->and($daily['2026-09-15']['tokens']['input'])->toBe(1)
         ->and($daily->sum(fn ($day) => array_sum($day['tokens'])))->toBe(9433)
@@ -117,12 +125,12 @@ test('by_model and totals sum the window, most tokens first, and count token typ
 
     $body = readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data');
 
-    expect($body['by_model'])->toEqual([
-        ['model' => 'claude-sonnet-4-6', 'tokens' => 9025, 'cost_usd' => 0.0],
-        ['model' => 'claude-opus-4-7', 'tokens' => 150, 'cost_usd' => 0.5],
-        ['model' => 'claude-haiku-4-5', 'tokens' => 0, 'cost_usd' => 0.25],
+    expect($body['by_model'])->toBe([
+        ['model' => 'claude-sonnet-4-6', 'tokens' => 9025, 'cost_usd' => '0.000000'],
+        ['model' => 'claude-opus-4-7', 'tokens' => 150, 'cost_usd' => '0.500000'],
+        ['model' => 'claude-haiku-4-5', 'tokens' => 0, 'cost_usd' => '0.250000'],
     ])
-        ->and($body['totals'])->toEqual(['tokens' => 9175, 'cost_usd' => 0.75])
+        ->and($body['totals'])->toBe(['tokens' => 9175, 'cost_usd' => '0.750000'])
         ->and(collect($body['daily'])->sum(fn ($day) => array_sum($day['tokens'])))->toBe(9150);
 });
 
@@ -137,7 +145,7 @@ test('another user\'s usage on the same team never appears', function () {
 
     $body = readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data');
 
-    expect($body['totals'])->toEqual(['tokens' => 10, 'cost_usd' => 0.0])
+    expect($body['totals'])->toBe(['tokens' => 10, 'cost_usd' => '0.000000'])
         ->and(collect($body['daily'])->last()['tokens']['input'])->toBe(10);
 });
 
@@ -174,7 +182,7 @@ test('a caller with no team, or the system context, gets zeros and an empty by_m
     expect($report['daily'])->toHaveCount(7)
         ->and(collect($report['daily'])->sum(fn ($day) => array_sum($day['tokens'])))->toBe(0)
         ->and($report['by_model'])->toBe([])
-        ->and($report['totals'])->toEqual(['tokens' => 0, 'cost_usd' => 0.0]);
+        ->and($report['totals'])->toBe(['tokens' => 0, 'cost_usd' => '0.000000']);
 })->with(['denied', 'system']);
 
 test('a token sum beyond int64 throws instead of saturating', function () {
@@ -228,8 +236,8 @@ test('daily, by_model and totals agree: daily sums equal the known-type totals a
     expect($perType->all())->toBe(['input' => 100, 'output' => 40, 'cacheRead' => 9000, 'cacheCreation' => 300])
         ->and($perType->sum() + $unknownTypes)->toBe($data['totals']['tokens'])
         ->and(collect($data['by_model'])->sum('tokens'))->toBe($data['totals']['tokens'])
-        ->and(round($daily->sum('cost_usd'), 6))->toEqual($data['totals']['cost_usd'])
-        ->and(round(collect($data['by_model'])->sum('cost_usd'), 6))->toEqual($data['totals']['cost_usd']);
+        ->and($daily->sum(fn ($day) => micros($day['cost_usd'])))->toBe(micros($data['totals']['cost_usd']))
+        ->and(collect($data['by_model'])->sum(fn ($model) => micros($model['cost_usd'])))->toBe(micros($data['totals']['cost_usd']));
 });
 
 test('daily, by_model and totals come from one SQL statement, so they share one snapshot', function () {
@@ -246,4 +254,19 @@ test('daily, by_model and totals come from one SQL statement, so they share one 
     app(UsageRepository::class)->summary($teamId, $ada->id, $today, $today);
 
     expect($statements)->toHaveCount(1);
+});
+
+test('cost is an exact decimal string, never rounded through a float', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+    foreach (range(1, 10) as $hour) {
+        ownUsage($ada, sprintf('2026-10-14 %02d:00:00', $hour), UsageMetric::Cost, '1000000000');
+    }
+    ownUsage($ada, '2026-10-14 11:30:00', UsageMetric::Cost, '0.000001');
+
+    $data = readAs(bearerOf($ada), '/api/usage?days=1')->assertOk()->json('data');
+
+    expect($data['totals']['cost_usd'])->toBe('10000000000.000001')
+        ->and($data['daily'][0]['cost_usd'])->toBe('10000000000.000001')
+        ->and($data['by_model'][0]['cost_usd'])->toBe('10000000000.000001');
 });
