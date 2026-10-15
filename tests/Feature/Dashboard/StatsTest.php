@@ -1,8 +1,12 @@
 <?php
 
+use App\Memory\Application\MemoryStats;
 use App\Memory\Domain\Observation;
 use App\Memory\Infrastructure\Persistence\EloquentMemoryRepository;
 use App\Models\User;
+use App\Team\Domain\AccessContext;
+use App\Team\Domain\Role;
+use App\Team\Infrastructure\Persistence\TeamUserRecord;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -141,4 +145,83 @@ test('totals are all time, count session summaries inside memories, and ignore t
 
     expect($data['totals'])->toBe(['memories' => 4, 'projects' => 3, 'session_summaries' => 2])
         ->and(array_sum(array_column($data['daily'], 'memories')))->toBe(2);
+});
+
+test('another members personal memories are excluded from every number, the callers own are kept', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $owner = User::factory()->create();
+    $member = User::factory()->create();
+    $team = contextFor($owner)->teamId;
+    TeamUserRecord::factory()->create(['team_id' => $team, 'user_id' => $member->id, 'role' => Role::Member]);
+    pinMemberAccess();
+    memoryOn($owner, '2026-10-10 10:00:00', 'decision', 'shared');
+    memoryOn($owner, '2026-10-10 10:00:00', 'session_summary', 'owner-secret', 'personal');
+    memoryOn($owner, '2026-10-10 10:00:00', 'bugfix', 'owner-secret', 'personal');
+    $mine = new Observation($member->id, 's', 'pattern', 'Mine', 'c', 'member-secret', 'personal', null, teamId: $team);
+    $saved = (new EloquentMemoryRepository)->save($mine);
+    DB::table('observations')->where('id', $saved->id)->update(['created_at' => '2026-10-10 10:00:00']);
+    $memberHeaders = ['Authorization' => 'Bearer '.$member->createTeamToken('cli', $team)->plainTextToken];
+
+    $stats = fn (array $headers) => readAs($headers, '/api/stats')->assertOk()->json('data');
+    $forMember = $stats($memberHeaders);
+    $forOwner = $stats(bearerOf($owner));
+
+    expect($forMember['totals'])->toBe(['memories' => 2, 'projects' => 2, 'session_summaries' => 0])
+        ->and(collect($forMember['daily'])->firstWhere('date', '2026-10-10'))->toBe(['date' => '2026-10-10', 'memories' => 2, 'session_summaries' => 0])
+        ->and(array_column($forMember['by_type'], 'count', 'type'))->toBe(['decision' => 1, 'pattern' => 1])
+        ->and(array_column($forMember['by_project'], 'project'))->toBe(['member-secret', 'shared'])
+        ->and($forOwner['totals'])->toBe(['memories' => 3, 'projects' => 2, 'session_summaries' => 1]);
+});
+
+test('a restricted member counts only the granted projects', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $owner = User::factory()->create();
+    $member = User::factory()->create();
+    $team = contextFor($owner)->teamId;
+    TeamUserRecord::factory()->create(['team_id' => $team, 'user_id' => $member->id, 'role' => Role::Member]);
+    memoryOn($owner, '2026-10-10 10:00:00', 'decision', 'granted');
+    memoryOn($owner, '2026-10-10 10:00:00', 'decision', 'granted');
+    memoryOn($owner, '2026-10-10 10:00:00', 'session_summary', 'hidden');
+    pinMemberAccess(DB::table('projects')->where('name', 'granted')->pluck('id')->all());
+    $memberHeaders = ['Authorization' => 'Bearer '.$member->createTeamToken('cli', $team)->plainTextToken];
+
+    $data = readAs($memberHeaders, '/api/stats')->assertOk()->json('data');
+
+    expect($data['totals'])->toBe(['memories' => 2, 'projects' => 1, 'session_summaries' => 0])
+        ->and($data['by_project'])->toBe([['project' => 'granted', 'count' => 2]])
+        ->and($data['by_type'])->toBe([['type' => 'decision', 'count' => 2]]);
+});
+
+test('memories of other teams are not counted', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+    $stranger = User::factory()->create();
+    memoryOn($ada, '2026-10-10 10:00:00', 'decision', 'mine');
+    memoryOn($stranger, '2026-10-10 10:00:00', 'decision', 'theirs');
+    memoryOn($stranger, '2026-10-10 10:00:00', 'session_summary', 'theirs');
+
+    $data = readAs(bearerOf($ada), '/api/stats')->assertOk()->json('data');
+
+    expect($data['totals'])->toBe(['memories' => 1, 'projects' => 1, 'session_summaries' => 0])
+        ->and($data['by_project'])->toBe([['project' => 'mine', 'count' => 1]]);
+});
+
+test('a denied context gets zeros and empty lists', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    memoryOn(User::factory()->create(), '2026-10-10 10:00:00');
+
+    $stats = app(MemoryStats::class)(AccessContext::denied(), 7);
+
+    expect($stats['activity']->totals)->toBe(['memories' => 0, 'projects' => 0, 'session_summaries' => 0])
+        ->and($stats['activity']->byType)->toBe([])
+        ->and($stats['activity']->byProject)->toBe([])
+        ->and($stats['daily'])->toHaveCount(7);
+});
+
+test('the stats work under a dashboard session', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+    memoryOn($ada, '2026-10-10 10:00:00');
+
+    sessionOf($ada)->getJson('/api/stats')->assertOk()->assertJsonPath('data.totals.memories', 1);
 });
