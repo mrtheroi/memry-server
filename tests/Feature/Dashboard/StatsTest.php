@@ -128,3 +128,17 @@ test('by_project is the top 10 of the range, count descending then name ascendin
         ])
         ->and($byProject[9])->toBe(['project' => 'p08', 'count' => 1]);
 });
+
+test('totals are all time, count session summaries inside memories, and ignore the range', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+    memoryOn($ada, '2026-10-10 10:00:00', 'decision', 'alpha');
+    memoryOn($ada, '2026-10-10 10:00:00', 'session_summary', 'alpha');
+    memoryOn($ada, '2025-01-01 10:00:00', 'decision', 'beta');
+    memoryOn($ada, '2025-01-01 10:00:00', 'session_summary', 'gamma');
+
+    $data = readAs(bearerOf($ada), '/api/stats?days=7')->assertOk()->json('data');
+
+    expect($data['totals'])->toBe(['memories' => 4, 'projects' => 3, 'session_summaries' => 2])
+        ->and(array_sum(array_column($data['daily'], 'memories')))->toBe(2);
+});

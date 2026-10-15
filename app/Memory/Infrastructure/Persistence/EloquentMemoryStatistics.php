@@ -21,11 +21,24 @@ class EloquentMemoryStatistics implements MemoryStatistics
         }
 
         return new MemoryActivity(
-            ['memories' => 0, 'projects' => 0, 'session_summaries' => 0],
+            $this->totals($context),
             $this->daily($context, $from, $to),
             $this->byType($context, $from, $to),
             $this->byProject($context, $from, $to),
         );
+    }
+
+    /**
+     * @return array{memories: int, projects: int, session_summaries: int}
+     */
+    private function totals(AccessContext $context): array
+    {
+        $row = $this->memories->scopeToReadable(ObservationRecord::query(), $context)
+            ->selectRaw('count(*) as memories, count(distinct project) as projects, count(*) filter (where type = \'session_summary\') as session_summaries')
+            ->toBase()
+            ->first();
+
+        return ['memories' => (int) $row->memories, 'projects' => (int) $row->projects, 'session_summaries' => (int) $row->session_summaries];
     }
 
     /**
