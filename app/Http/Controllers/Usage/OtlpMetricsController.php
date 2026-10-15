@@ -51,7 +51,9 @@ class OtlpMetricsController extends Controller
                     .'Set OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta.'
                 : null,
             $parsed->rejectedInvalid > 0
-                ? "{$parsed->rejectedInvalid} data points with an invalid value were skipped; values must be non-negative numbers."
+                ? "{$parsed->rejectedInvalid} data points with an invalid value were skipped; values must be non-negative numbers; "
+                    .'token values must be whole numbers up to '.OtlpMetricsParser::MAX_TOKENS
+                    .' and cost values at most '.OtlpMetricsParser::MAX_COST_USD.'.'
                 : null,
         ]);
 

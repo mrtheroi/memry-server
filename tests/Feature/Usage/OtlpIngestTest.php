@@ -306,7 +306,7 @@ test('invalid values are skipped and reported, never a server error', function (
     $this->withToken(ingestToken($user))->postJson('/api/otlp/v1/metrics', $export)
         ->assertOk()
         ->assertJsonPath('partialSuccess.rejectedDataPoints', '6')
-        ->assertJsonPath('partialSuccess.errorMessage', 'memry expects delta temporality; 1 cumulative data points were skipped. Set OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta. 5 data points with an invalid value were skipped; values must be non-negative numbers.');
+        ->assertJsonPath('partialSuccess.errorMessage', 'memry expects delta temporality; 1 cumulative data points were skipped. Set OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta. 5 data points with an invalid value were skipped; values must be non-negative numbers; token values must be whole numbers up to 1000000000000 and cost values at most 1000000000.');
 
     expect(usageTotals())->toBe(['rows' => 1, 'tokens' => '7.000000', 'cost' => '0']);
 });
