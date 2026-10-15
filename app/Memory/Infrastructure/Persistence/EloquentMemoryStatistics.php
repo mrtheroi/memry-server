@@ -10,6 +10,8 @@ use Illuminate\Database\Eloquent\Builder;
 
 class EloquentMemoryStatistics implements MemoryStatistics
 {
+    private const TOP_PROJECTS = 10;
+
     public function __construct(private EloquentMemoryRepository $memories = new EloquentMemoryRepository) {}
 
     public function activity(AccessContext $context, DateTimeImmutable $from, DateTimeImmutable $to): MemoryActivity
@@ -22,7 +24,7 @@ class EloquentMemoryStatistics implements MemoryStatistics
             ['memories' => 0, 'projects' => 0, 'session_summaries' => 0],
             $this->daily($context, $from, $to),
             $this->byType($context, $from, $to),
-            [],
+            $this->byProject($context, $from, $to),
         );
     }
 
@@ -51,6 +53,23 @@ class EloquentMemoryStatistics implements MemoryStatistics
             ->orderBy('type')
             ->get()
             ->map(fn ($row) => ['type' => $row->type, 'count' => (int) $row->count])
+            ->all();
+    }
+
+    /**
+     * @return list<array{project: string, count: int}>
+     */
+    private function byProject(AccessContext $context, DateTimeImmutable $from, DateTimeImmutable $to): array
+    {
+        return $this->inRange($context, $from, $to)
+            ->whereNotNull('project')
+            ->selectRaw('project, count(*) as count')
+            ->groupBy('project')
+            ->orderByRaw('count(*) DESC')
+            ->orderBy('project')
+            ->limit(self::TOP_PROJECTS)
+            ->get()
+            ->map(fn ($row) => ['project' => $row->project, 'count' => (int) $row->count])
             ->all();
     }
 

@@ -105,3 +105,26 @@ test('by_type counts the range by type, count descending then type ascending', f
         ['type' => 'session_summary', 'count' => 1],
     ]);
 });
+
+test('by_project is the top 10 of the range, count descending then name ascending', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+    foreach (range(1, 12) as $n) { // p01..p12 get one memory each
+        memoryOn($ada, '2026-10-10 10:00:00', 'decision', sprintf('p%02d', $n));
+    }
+    memoryOn($ada, '2026-10-11 10:00:00', 'decision', 'p12');
+    memoryOn($ada, '2026-10-11 10:00:00', 'decision', 'p12');
+    memoryOn($ada, '2026-10-11 10:00:00', 'decision', 'p11');
+    memoryOn($ada, '2026-08-01 10:00:00', 'decision', 'old'); // outside the range
+
+    $byProject = readAs(bearerOf($ada), '/api/stats')->assertOk()->json('data.by_project');
+
+    expect($byProject)->toHaveCount(10)
+        ->and(array_slice($byProject, 0, 4))->toBe([
+            ['project' => 'p12', 'count' => 3],
+            ['project' => 'p11', 'count' => 2],
+            ['project' => 'p01', 'count' => 1],
+            ['project' => 'p02', 'count' => 1],
+        ])
+        ->and($byProject[9])->toBe(['project' => 'p08', 'count' => 1]);
+});
