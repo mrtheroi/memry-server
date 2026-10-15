@@ -100,7 +100,7 @@ Tokens expire after 30 days without use (`MEMRY_TOKEN_IDLE_DAYS`); an expired to
 
 Only **delta** data points (`aggregationTemporality` 1) are stored, which is the Claude Code default. Cumulative points are skipped and reported in the response (below). Zero values are skipped, `model`, `query_source` and `session.id` are cut to 200 characters, and a missing `model` is stored as `unknown`. Points whose time window is not valid int64 nanoseconds are skipped.
 
-**Values.** A point's value is `asInt` (a decimal int64 string, or a JSON integer) or `asDouble` (a finite JSON number). Counters here are monotonic deltas, so a missing value, a non-numeric or out-of-int64-range `asInt`, an array or object, a negative number, `NaN`/`Infinity` (as strings) or a double of `1e30` or more is **invalid**. Invalid points are skipped, never a server error, and counted in `partialSuccess` (below). Values are stored as `numeric(38,6)`, so every int64 fits.
+**Values.** A point's value is `asInt` (a decimal int64 string, or a JSON integer) or `asDouble` (a finite JSON number). Counters here are monotonic deltas, so a missing value, a non-numeric or out-of-int64-range `asInt`, an array or object, a negative number, `NaN`/`Infinity` (as strings) a double of `1e30` or more, a `claude_code.token.usage` value above **1,000,000,000,000** (one trillion tokens, `OtlpMetricsParser::MAX_TOKENS`) or a `claude_code.cost.usage` value above **1,000,000,000** USD (`OtlpMetricsParser::MAX_COST_USD`) is **invalid**. No real delta comes near those limits; they keep the sums `GET /api/usage` computes far from overflowing. Invalid points are skipped, never a server error, and counted in `partialSuccess` (below). Values are stored as `numeric(38,6)`, so every int64 fits.
 
 **Series identity.** A series is the metric plus the **complete** attribute set of the data point (sorted by key, values normalized to strings, hashed with sha256 into `series_hash`), so points that differ in any attribute (`speed`, `effort`, `skill.name`, `mcp_server.name`, ...) are separate series and are never merged. `model`, `token_type`, `query_source` and `session_id` are also stored as columns for querying. Resource attributes are not part of the identity: they describe the exporter, are constant for it, and include `user.*` values that are never trusted.
 
@@ -273,6 +273,7 @@ Rules:
 - **Unknown token types.** The ingest stores the `type` attribute as sent and currently drops token points whose type is not one of the four known ones, so today every stored token point is one of them. Should another type ever be stored, it is left out of `daily[].tokens` but still counted in `by_model[].tokens` and `totals.tokens`.
 - **`by_model`** sums tokens (every type) and cost per model within the window, ordered by tokens descending then model ascending. A model with only cost points appears with `tokens: 0`.
 - **`cost_usd`** is in US dollars, rounded to 6 decimals.
+- **No silent overflow.** A token sum that does not fit a 64-bit integer is an error (`500`), never a saturated number. The ingest limits (see [Values](#otlp-usage-ingest)) keep it out of reach through the API.
 
 ## Dashboard: deleting
 

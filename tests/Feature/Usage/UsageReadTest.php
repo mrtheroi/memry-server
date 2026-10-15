@@ -4,10 +4,13 @@ use App\Models\User;
 use App\Team\Domain\AccessContext;
 use App\Usage\Application\UsageReport;
 use App\Usage\Domain\UsageMetric;
+use App\Usage\Domain\UsageOverflow;
 use App\Usage\Domain\UsagePoint;
 use App\Usage\Domain\UsageRepository;
+use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 
 uses(RefreshDatabase::class);
 
@@ -173,3 +176,34 @@ test('a caller with no team, or the system context, gets zeros and an empty by_m
         ->and($report['by_model'])->toBe([])
         ->and($report['totals'])->toEqual(['tokens' => 0, 'cost_usd' => 0.0]);
 })->with(['denied', 'system']);
+
+test('a token sum beyond int64 throws instead of saturating', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+    $teamId = contextFor($ada)->teamId;
+    // Rows inserted directly: the ingest refuses points this large, so only a direct write can build the sum.
+    foreach (['a', 'b'] as $series) {
+        DB::table('usage_points')->insert([
+            'team_id' => $teamId, 'user_id' => $ada->id, 'metric' => 'tokens', 'series_hash' => hash('sha256', $series),
+            'model' => 'claude-opus-4-7', 'token_type' => 'input', 'start_unix_nano' => nanosAt('2026-10-14 08:59:00'),
+            'end_unix_nano' => nanosAt('2026-10-14 09:00:00'), 'value' => '9223372036854775807',
+        ]);
+    }
+    $today = CarbonImmutable::parse('2026-10-14', 'UTC');
+
+    app(UsageRepository::class)->summary($teamId, $ada->id, $today, $today);
+})->throws(UsageOverflow::class);
+
+test('a token sum of exactly the int64 maximum still converts', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+    $teamId = contextFor($ada)->teamId;
+    DB::table('usage_points')->insert([
+        'team_id' => $teamId, 'user_id' => $ada->id, 'metric' => 'tokens', 'series_hash' => hash('sha256', 'a'),
+        'model' => 'claude-opus-4-7', 'token_type' => 'input', 'start_unix_nano' => nanosAt('2026-10-14 08:59:00'),
+        'end_unix_nano' => nanosAt('2026-10-14 09:00:00'), 'value' => (string) PHP_INT_MAX,
+    ]);
+    $today = CarbonImmutable::parse('2026-10-14', 'UTC');
+
+    expect(app(UsageRepository::class)->summary($teamId, $ada->id, $today, $today)->totals['tokens'])->toBe(PHP_INT_MAX);
+});

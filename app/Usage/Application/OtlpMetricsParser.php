@@ -31,6 +31,14 @@ final class OtlpMetricsParser
     // Keeps a double within numeric(38,6), which has 32 integer digits.
     private const MAX_DOUBLE = 1.0e30;
 
+    // The largest valid value of one data point per metric. No real delta comes near these; anything above
+    // is invalid, which keeps every read-time sum far from overflowing (int64 for tokens).
+    public const MAX_TOKENS = 1_000_000_000_000;
+
+    public const MAX_COST_USD = 1_000_000_000;
+
+    private const MAX_VALUE = ['tokens' => self::MAX_TOKENS, 'cost' => self::MAX_COST_USD];
+
     /**
      * @param  mixed  $payload  the body decoded with json_decode(..., false): JSON objects are stdClass and
      *                          JSON arrays are lists, so an empty `{}` is never mistaken for an empty `[]`
@@ -69,7 +77,7 @@ final class OtlpMetricsParser
                             continue;
                         }
 
-                        $value = $this->value($dataPoint);
+                        $value = $this->value($dataPoint, $kind);
                         if ($value === false) {
                             $invalid++;
 
@@ -216,11 +224,22 @@ final class OtlpMetricsParser
     /**
      * The value of the data point's oneof (`asInt` or `asDouble`) as a decimal string; null for a zero
      * (nothing to count); false when it is missing or not a valid monotonic delta: not a decimal int64
-     * string/int, not a finite number, negative, or too large for the numeric(38,6) column.
+     * string/int, not a finite number, negative, too large for the numeric(38,6) column, or above the
+     * metric's limit.
      *
      * @param  array<mixed>  $dataPoint
      */
-    private function value(array $dataPoint): string|false|null
+    private function value(array $dataPoint, UsageMetric $kind): string|false|null
+    {
+        $value = $this->rawValue($dataPoint);
+
+        return is_string($value) && (float) $value > self::MAX_VALUE[$kind->value] ? false : $value;
+    }
+
+    /**
+     * @param  array<mixed>  $dataPoint
+     */
+    private function rawValue(array $dataPoint): string|false|null
     {
         if (($dataPoint['asInt'] ?? null) !== null) {
             $raw = $dataPoint['asInt'];

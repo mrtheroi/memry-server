@@ -2,6 +2,7 @@
 
 namespace App\Usage\Infrastructure\Persistence;
 
+use App\Usage\Domain\UsageOverflow;
 use App\Usage\Domain\UsagePoint;
 use App\Usage\Domain\UsageRepository;
 use App\Usage\Domain\UsageSummary;
@@ -73,7 +74,7 @@ final class QueryUsageRepository implements UsageRepository
             ->groupByRaw('end_unix_nano / '.self::NANOS_PER_DAY)
             ->get()
             ->mapWithKeys(fn ($row) => [gmdate('Y-m-d', (int) $row->day * 86400) => [
-                'tokens' => array_combine(self::TOKEN_TYPES, array_map(fn (string $type) => (int) $row->{$type}, self::TOKEN_TYPES)),
+                'tokens' => array_combine(self::TOKEN_TYPES, array_map(fn (string $type) => $this->tokens($row->{$type}), self::TOKEN_TYPES)),
                 'cost_usd' => (float) $row->cost_usd,
             ]])
             ->all();
@@ -92,7 +93,7 @@ final class QueryUsageRepository implements UsageRepository
             ->orderByDesc('tokens')
             ->orderBy('model')
             ->get()
-            ->map(fn ($row) => ['model' => $row->model, 'tokens' => (int) $row->tokens, 'cost_usd' => (float) $row->cost_usd])
+            ->map(fn ($row) => ['model' => $row->model, 'tokens' => $this->tokens($row->tokens), 'cost_usd' => (float) $row->cost_usd])
             ->all();
     }
 
@@ -103,7 +104,7 @@ final class QueryUsageRepository implements UsageRepository
     {
         $row = $this->inRange($teamId, $userId, $from, $to)->selectRaw(self::TOTAL_TOKENS.', '.self::TOTAL_COST)->first();
 
-        return ['tokens' => (int) $row->tokens, 'cost_usd' => (float) $row->cost_usd];
+        return ['tokens' => $this->tokens($row->tokens), 'cost_usd' => (float) $row->cost_usd];
     }
 
     /**
@@ -117,6 +118,22 @@ final class QueryUsageRepository implements UsageRepository
             ->where('user_id', $userId)
             ->where('end_unix_nano', '>=', $this->startOfDayNanos($from))
             ->where('end_unix_nano', '<', $this->startOfDayNanos($to->modify('+1 day')));
+    }
+
+    /**
+     * A token sum as an int, checked: the numeric sum is compared as a decimal string, so a value past int64
+     * throws instead of saturating at PHP_INT_MAX. Sums are never negative (the ingest rejects negative values).
+     */
+    private function tokens(int|string $sum): int
+    {
+        $digits = ltrim(explode('.', (string) $sum)[0], '0') ?: '0';
+        $max = (string) PHP_INT_MAX;
+
+        if (strlen($digits) > strlen($max) || (strlen($digits) === strlen($max) && strcmp($digits, $max) > 0)) {
+            throw UsageOverflow::tokens((string) $sum);
+        }
+
+        return (int) $digits;
     }
 
     private function startOfDayNanos(DateTimeImmutable $day): int

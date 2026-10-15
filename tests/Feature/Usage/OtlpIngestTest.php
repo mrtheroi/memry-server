@@ -311,12 +311,32 @@ test('invalid values are skipped and reported, never a server error', function (
     expect(usageTotals())->toBe(['rows' => 1, 'tokens' => '7.000000', 'cost' => '0']);
 });
 
-test('the int64 maximum is stored without overflow', function () {
+test('a token point over one trillion is invalid and nothing is stored', function () {
     $this->withToken(ingestToken(User::factory()->create()))
-        ->postJson('/api/otlp/v1/metrics', otlp(sumMetric('claude_code.token.usage', [tokenPoint('input', '9223372036854775807')])))
+        ->postJson('/api/otlp/v1/metrics', otlp(sumMetric('claude_code.token.usage', [tokenPoint('input', '1000000000001')])))
+        ->assertOk()
+        ->assertJsonPath('partialSuccess.rejectedDataPoints', '1');
+
+    expect(usageTotals()['rows'])->toBe(0);
+});
+
+test('a cost point over one billion USD is invalid, and exactly one billion is stored', function () {
+    $cost = fn (float|int $usd, string $end) => ['attributes' => attrs(['model' => 'm']), 'startTimeUnixNano' => '1', 'timeUnixNano' => $end, 'asDouble' => $usd];
+
+    $this->withToken(ingestToken(User::factory()->create()))
+        ->postJson('/api/otlp/v1/metrics', otlp(sumMetric('claude_code.cost.usage', [$cost(1_000_000_000.01, '2'), $cost(1_000_000_000, '3')])))
+        ->assertOk()
+        ->assertJsonPath('partialSuccess.rejectedDataPoints', '1');
+
+    expect(usageTotals())->toBe(['rows' => 1, 'tokens' => '0', 'cost' => '1000000000.000000']);
+});
+
+test('a token point of exactly one trillion, the limit, is stored', function () {
+    $this->withToken(ingestToken(User::factory()->create()))
+        ->postJson('/api/otlp/v1/metrics', otlp(sumMetric('claude_code.token.usage', [tokenPoint('input', '1000000000000')])))
         ->assertOk()->assertExactJson([]);
 
-    expect((string) DB::table('usage_points')->sole()->value)->toBe('9223372036854775807.000000');
+    expect((string) DB::table('usage_points')->sole()->value)->toBe('1000000000000.000000');
 });
 
 test('a malformed metric name or structure is a 400, never a 500', function (string $metric) {
