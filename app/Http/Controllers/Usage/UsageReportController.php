@@ -17,6 +17,6 @@ class UsageReportController extends Controller
         // Only an omitted `days` defaults; a present but empty value is a 422, not a silent 30.
         $input = $request->validate(['days' => ['sometimes', 'required', 'integer', 'min:1', 'max:90']]);
 
-        return response()->json($usageReport($context, (int) ($input['days'] ?? self::DEFAULT_DAYS)));
+        return response()->json(['data' => $usageReport($context, (int) ($input['days'] ?? self::DEFAULT_DAYS))]);
     }
 }

@@ -257,12 +257,12 @@ Rules:
 | `days` | optional integer from 1 to 90, default 30. Anything else answers `422` |
 
 ```json
-{
+{"data": {
   "days": 30, "from": "2026-09-15", "to": "2026-10-14",
   "daily": [{"date": "2026-09-15", "tokens": {"input": 0, "output": 0, "cacheRead": 0, "cacheCreation": 0}, "cost_usd": 0}],
   "by_model": [{"model": "claude-sonnet-4-6", "tokens": 9025, "cost_usd": 0.31}],
   "totals": {"tokens": 9175, "cost_usd": 0.75}
-}
+}}
 ```
 
 Rules:

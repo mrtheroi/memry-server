@@ -32,7 +32,7 @@ test('with no usage the default window is 30 UTC days, zero-filled oldest first'
     $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
     $ada = User::factory()->create();
 
-    $body = readAs(bearerOf($ada), '/api/usage')->assertOk()->json();
+    $body = readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data');
 
     $zero = ['input' => 0, 'output' => 0, 'cacheRead' => 0, 'cacheCreation' => 0];
     expect($body['days'])->toBe(30)
@@ -49,7 +49,7 @@ test('days sets the window, today included', function (int $days, string $from) 
     $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
     $ada = User::factory()->create();
 
-    $body = readAs(bearerOf($ada), '/api/usage?days='.$days)->assertOk()->json();
+    $body = readAs(bearerOf($ada), '/api/usage?days='.$days)->assertOk()->json('data');
 
     expect([$body['days'], $body['from'], $body['to']])->toBe([$days, $from, '2026-10-14'])
         ->and($body['daily'])->toHaveCount($days);
@@ -91,7 +91,7 @@ test('daily sums tokens by type and cost on the UTC day of the point end time', 
     ownUsage($ada, '2026-09-15 00:00:00', UsageMetric::Tokens, '1', 'input');
     ownUsage($ada, '2026-09-14 23:59:59', UsageMetric::Tokens, '999', 'input'); // before the window
 
-    $daily = collect(readAs(bearerOf($ada), '/api/usage')->assertOk()->json('daily'))->keyBy('date');
+    $daily = collect(readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data.daily'))->keyBy('date');
 
     expect($daily['2026-10-14'])->toEqual(['date' => '2026-10-14', 'tokens' => ['input' => 120, 'output' => 7, 'cacheRead' => 9000, 'cacheCreation' => 300], 'cost_usd' => 0.042102])
         ->and($daily['2026-10-13']['tokens'])->toBe(['input' => 0, 'output' => 5, 'cacheRead' => 0, 'cacheCreation' => 0])
@@ -112,7 +112,7 @@ test('by_model and totals sum the window, most tokens first, and count token typ
     ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Cost, '0.25', model: 'claude-haiku-4-5'); // cost only
     ownUsage($ada, '2026-09-01 09:00:00', UsageMetric::Tokens, '777', 'input', 'claude-opus-4-7'); // before the window
 
-    $body = readAs(bearerOf($ada), '/api/usage')->assertOk()->json();
+    $body = readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data');
 
     expect($body['by_model'])->toEqual([
         ['model' => 'claude-sonnet-4-6', 'tokens' => 9025, 'cost_usd' => 0.0],
@@ -132,7 +132,7 @@ test('another user\'s usage on the same team never appears', function () {
     usagePoint(contextFor($ada)->teamId, $bob->id, '2026-10-14 09:00:00', UsageMetric::Cost, '3');
     ownUsage($bob, '2026-10-14 09:00:00', UsageMetric::Tokens, '700', 'input');
 
-    $body = readAs(bearerOf($ada), '/api/usage')->assertOk()->json();
+    $body = readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data');
 
     expect($body['totals'])->toEqual(['tokens' => 10, 'cost_usd' => 0.0])
         ->and(collect($body['daily'])->last()['tokens']['input'])->toBe(10);
@@ -146,7 +146,7 @@ test('the caller\'s usage on another team never appears', function () {
     ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, '10', 'input');
     usagePoint($otherTeam, $ada->id, '2026-10-14 09:00:00', UsageMetric::Tokens, '500', 'input', 'claude-sonnet-4-6');
 
-    $body = readAs(bearerOf($ada), '/api/usage')->assertOk()->json();
+    $body = readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data');
 
     expect($body['totals']['tokens'])->toBe(10)
         ->and(collect($body['by_model'])->pluck('model')->all())->toBe(['claude-opus-4-7']);
@@ -157,7 +157,7 @@ test('a dashboard session reads its own usage', function () {
     $ada = User::factory()->create();
     ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, '42', 'output');
 
-    sessionOf($ada)->getJson('/api/usage?days=1')->assertOk()->assertJsonPath('daily.0.tokens.output', 42);
+    sessionOf($ada)->getJson('/api/usage?days=1')->assertOk()->assertJsonPath('data.daily.0.tokens.output', 42);
 });
 
 test('a caller with no team, or the system context, gets zeros and an empty by_model', function (string $kind) {
