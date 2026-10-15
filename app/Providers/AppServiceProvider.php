@@ -20,8 +20,10 @@ use App\Team\Domain\TeamSlugs;
 use App\Team\Infrastructure\EloquentAccessContextResolver;
 use App\Team\Infrastructure\RandomTeamSlugs;
 use App\Team\Infrastructure\RoleProjectAccessPolicy;
+use App\Usage\Application\OtlpMetricsParser;
 use App\Usage\Domain\UsageRepository;
 use App\Usage\Infrastructure\Persistence\QueryUsageRepository;
+use App\Usage\Infrastructure\Security\UsageSeriesKey;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
@@ -42,6 +44,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(ProjectCatalog::class, QueryProjectCatalog::class);
         $this->app->bind(MemoryStatistics::class, EloquentMemoryStatistics::class);
         $this->app->bind(UsageRepository::class, QueryUsageRepository::class);
+        $this->app->bind(OtlpMetricsParser::class, fn () => new OtlpMetricsParser(UsageSeriesKey::fromAppKey((string) config('app.key'))));
         $this->app->bind(TeamSlugs::class, RandomTeamSlugs::class);
         $this->app->bind(AccessContextResolver::class, EloquentAccessContextResolver::class);
         $this->app->bind(ProjectAccessPolicy::class, RoleProjectAccessPolicy::class);

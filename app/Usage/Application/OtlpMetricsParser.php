@@ -36,6 +36,9 @@ final class OtlpMetricsParser
 
     private const MAX_VALUE = ['tokens' => self::MAX_TOKENS, 'cost' => self::MAX_COST_USD];
 
+    /** @param  string  $seriesKey  the secret the series identity is keyed with */
+    public function __construct(private readonly string $seriesKey) {}
+
     /**
      * @param  mixed  $payload  the body decoded with json_decode(..., false): JSON objects are stdClass and
      *                          JSON arrays are lists, so an empty `{}` is never mistaken for an empty `[]`
@@ -191,7 +194,8 @@ final class OtlpMetricsParser
      * The identity of a series: the metric plus the COMPLETE attribute set of the data point, so two
      * series that differ in any attribute (speed, skill.name, ...) are never collapsed. Resource
      * attributes are left out on purpose: they describe the exporter, are constant for it, and carry
-     * `user.*` values that are never trusted; the user comes from the token.
+     * `user.*` values that are never trusted; the user comes from the token. The hash is keyed: the
+     * point attributes carry `user.email` and friends, and a plain hash could be confirmed by guessing them.
      *
      * @param  array<string, string|null>  $attributes
      */
@@ -199,7 +203,7 @@ final class OtlpMetricsParser
     {
         ksort($attributes, SORT_STRING);
 
-        return hash('sha256', json_encode([$metricName, $attributes], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+        return hash_hmac('sha256', json_encode([$metricName, $attributes], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), $this->seriesKey);
     }
 
     /** An OTLP AnyValue as a string: scalars by their JSON form, anything else as canonical JSON. */

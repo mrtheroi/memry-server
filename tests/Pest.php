@@ -248,5 +248,5 @@ function tokenPoint(string $type, string $value, string $model = 'claude-opus-4-
 /** Runs the parser on a payload built as a PHP array, decoded the way the controller decodes the body. */
 function parseOtlp(array|stdClass $payload): ParsedUsage
 {
-    return (new OtlpMetricsParser)(json_decode(json_encode($payload)));
+    return (new OtlpMetricsParser('test-series-key'))(json_decode(json_encode($payload)));
 }
