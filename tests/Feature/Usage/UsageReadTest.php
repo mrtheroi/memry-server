@@ -4,7 +4,6 @@ use App\Models\User;
 use App\Team\Domain\AccessContext;
 use App\Usage\Application\UsageReport;
 use App\Usage\Domain\UsageMetric;
-use App\Usage\Domain\UsageOverflow;
 use App\Usage\Domain\UsagePoint;
 use App\Usage\Domain\UsageRepository;
 use Carbon\CarbonImmutable;
@@ -37,7 +36,7 @@ test('with no usage the default window is 30 UTC days, zero-filled oldest first'
 
     $body = readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data');
 
-    $zero = ['input' => 0, 'output' => 0, 'cacheRead' => 0, 'cacheCreation' => 0];
+    $zero = ['input' => '0', 'output' => '0', 'cacheRead' => '0', 'cacheCreation' => '0'];
     expect($body['days'])->toBe(30)
         ->and($body['from'])->toBe('2026-09-15')
         ->and($body['to'])->toBe('2026-10-14')
@@ -45,7 +44,7 @@ test('with no usage the default window is 30 UTC days, zero-filled oldest first'
         ->and($body['daily'][0])->toBe(['date' => '2026-09-15', 'tokens' => $zero, 'cost_usd' => '0.000000'])
         ->and($body['daily'][29])->toBe(['date' => '2026-10-14', 'tokens' => $zero, 'cost_usd' => '0.000000'])
         ->and($body['by_model'])->toBe([])
-        ->and($body['totals'])->toBe(['tokens' => 0, 'cost_usd' => '0.000000']);
+        ->and($body['totals'])->toBe(['tokens' => '0', 'cost_usd' => '0.000000']);
 });
 
 test('days sets the window, today included', function (int $days, string $from) {
@@ -73,6 +72,20 @@ function usagePoint(int $teamId, int $userId, string $endUtc, UsageMetric $metri
     app(UsageRepository::class)->record($teamId, $userId, [new UsagePoint(
         $metric, $model, $tokenType, 'main', 'sess-1', $start, $end, $value, hash('sha256', uniqid('', true)),
     )]);
+}
+
+/** An exact integer token string as an int (the test values are small), checking it has no decimal part. */
+function whole(string $tokens): int
+{
+    expect($tokens)->toMatch('/^\\d+$/');
+
+    return (int) $tokens;
+}
+
+/** @param array<string, string> $tokens */
+function wholeSum(array $tokens): int
+{
+    return array_sum(array_map(whole(...), $tokens));
 }
 
 /** An exact 6-decimal cost string as integer micro-dollars, so cost sums are compared without floats. */
@@ -104,10 +117,10 @@ test('daily sums tokens by type and cost on the UTC day of the point end time', 
 
     $daily = collect(readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data.daily'))->keyBy('date');
 
-    expect($daily['2026-10-14'])->toBe(['date' => '2026-10-14', 'tokens' => ['input' => 120, 'output' => 7, 'cacheRead' => 9000, 'cacheCreation' => 300], 'cost_usd' => '0.042102'])
-        ->and($daily['2026-10-13']['tokens'])->toBe(['input' => 0, 'output' => 5, 'cacheRead' => 0, 'cacheCreation' => 0])
-        ->and($daily['2026-09-15']['tokens']['input'])->toBe(1)
-        ->and($daily->sum(fn ($day) => array_sum($day['tokens'])))->toBe(9433)
+    expect($daily['2026-10-14'])->toBe(['date' => '2026-10-14', 'tokens' => ['input' => '120', 'output' => '7', 'cacheRead' => '9000', 'cacheCreation' => '300'], 'cost_usd' => '0.042102'])
+        ->and($daily['2026-10-13']['tokens'])->toBe(['input' => '0', 'output' => '5', 'cacheRead' => '0', 'cacheCreation' => '0'])
+        ->and($daily['2026-09-15']['tokens']['input'])->toBe('1')
+        ->and($daily->sum(fn ($day) => wholeSum($day['tokens'])))->toBe(9433)
         ->and($daily->keys()->all())->toBe($daily->keys()->sort()->values()->all());
 });
 
@@ -126,12 +139,12 @@ test('by_model and totals sum the window, most tokens first, and count token typ
     $body = readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data');
 
     expect($body['by_model'])->toBe([
-        ['model' => 'claude-sonnet-4-6', 'tokens' => 9025, 'cost_usd' => '0.000000'],
-        ['model' => 'claude-opus-4-7', 'tokens' => 150, 'cost_usd' => '0.500000'],
-        ['model' => 'claude-haiku-4-5', 'tokens' => 0, 'cost_usd' => '0.250000'],
+        ['model' => 'claude-sonnet-4-6', 'tokens' => '9025', 'cost_usd' => '0.000000'],
+        ['model' => 'claude-opus-4-7', 'tokens' => '150', 'cost_usd' => '0.500000'],
+        ['model' => 'claude-haiku-4-5', 'tokens' => '0', 'cost_usd' => '0.250000'],
     ])
-        ->and($body['totals'])->toBe(['tokens' => 9175, 'cost_usd' => '0.750000'])
-        ->and(collect($body['daily'])->sum(fn ($day) => array_sum($day['tokens'])))->toBe(9150);
+        ->and($body['totals'])->toBe(['tokens' => '9175', 'cost_usd' => '0.750000'])
+        ->and(collect($body['daily'])->sum(fn ($day) => wholeSum($day['tokens'])))->toBe(9150);
 });
 
 test('another user\'s usage on the same team never appears', function () {
@@ -145,8 +158,8 @@ test('another user\'s usage on the same team never appears', function () {
 
     $body = readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data');
 
-    expect($body['totals'])->toBe(['tokens' => 10, 'cost_usd' => '0.000000'])
-        ->and(collect($body['daily'])->last()['tokens']['input'])->toBe(10);
+    expect($body['totals'])->toBe(['tokens' => '10', 'cost_usd' => '0.000000'])
+        ->and(collect($body['daily'])->last()['tokens']['input'])->toBe('10');
 });
 
 test('the caller\'s usage on another team never appears', function () {
@@ -159,7 +172,7 @@ test('the caller\'s usage on another team never appears', function () {
 
     $body = readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data');
 
-    expect($body['totals']['tokens'])->toBe(10)
+    expect($body['totals']['tokens'])->toBe('10')
         ->and(collect($body['by_model'])->pluck('model')->all())->toBe(['claude-opus-4-7']);
 });
 
@@ -168,7 +181,7 @@ test('a dashboard session reads its own usage', function () {
     $ada = User::factory()->create();
     ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, '42', 'output');
 
-    sessionOf($ada)->getJson('/api/usage?days=1')->assertOk()->assertJsonPath('data.daily.0.tokens.output', 42);
+    sessionOf($ada)->getJson('/api/usage?days=1')->assertOk()->assertJsonPath('data.daily.0.tokens.output', '42');
 });
 
 test('a caller with no team, or the system context, gets zeros and an empty by_model', function (string $kind) {
@@ -180,12 +193,12 @@ test('a caller with no team, or the system context, gets zeros and an empty by_m
     $report = app(UsageReport::class)($context, 7);
 
     expect($report['daily'])->toHaveCount(7)
-        ->and(collect($report['daily'])->sum(fn ($day) => array_sum($day['tokens'])))->toBe(0)
+        ->and(collect($report['daily'])->sum(fn ($day) => wholeSum($day['tokens'])))->toBe(0)
         ->and($report['by_model'])->toBe([])
-        ->and($report['totals'])->toBe(['tokens' => 0, 'cost_usd' => '0.000000']);
+        ->and($report['totals'])->toBe(['tokens' => '0', 'cost_usd' => '0.000000']);
 })->with(['denied', 'system']);
 
-test('a token sum beyond int64 throws instead of saturating', function () {
+test('a token sum beyond int64 comes back as the exact decimal string', function () {
     $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
     $ada = User::factory()->create();
     $teamId = contextFor($ada)->teamId;
@@ -199,21 +212,11 @@ test('a token sum beyond int64 throws instead of saturating', function () {
     }
     $today = CarbonImmutable::parse('2026-10-14', 'UTC');
 
-    app(UsageRepository::class)->summary($teamId, $ada->id, $today, $today);
-})->throws(UsageOverflow::class);
+    $summary = app(UsageRepository::class)->summary($teamId, $ada->id, $today, $today);
 
-test('a token sum of exactly the int64 maximum still converts', function () {
-    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
-    $ada = User::factory()->create();
-    $teamId = contextFor($ada)->teamId;
-    DB::table('usage_points')->insert([
-        'team_id' => $teamId, 'user_id' => $ada->id, 'metric' => 'tokens', 'series_hash' => hash('sha256', 'a'),
-        'model' => 'claude-opus-4-7', 'token_type' => 'input', 'start_unix_nano' => nanosAt('2026-10-14 08:59:00'),
-        'end_unix_nano' => nanosAt('2026-10-14 09:00:00'), 'value' => (string) PHP_INT_MAX,
-    ]);
-    $today = CarbonImmutable::parse('2026-10-14', 'UTC');
-
-    expect(app(UsageRepository::class)->summary($teamId, $ada->id, $today, $today)->totals['tokens'])->toBe(PHP_INT_MAX);
+    expect($summary->totals['tokens'])->toBe('18446744073709551614')
+        ->and($summary->byModel[0]['tokens'])->toBe('18446744073709551614')
+        ->and($summary->daily['2026-10-14']['tokens']['input'])->toBe('18446744073709551614');
 });
 
 test('daily, by_model and totals agree: daily sums equal the known-type totals and by_model sums equal totals', function () {
@@ -230,12 +233,12 @@ test('daily, by_model and totals agree: daily sums equal the known-type totals a
     $data = readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data');
 
     $daily = collect($data['daily']);
-    $perType = collect(['input', 'output', 'cacheRead', 'cacheCreation'])->mapWithKeys(fn ($type) => [$type => $daily->sum("tokens.{$type}")]);
+    $perType = collect(['input', 'output', 'cacheRead', 'cacheCreation'])->mapWithKeys(fn ($type) => [$type => $daily->sum(fn ($day) => whole($day['tokens'][$type]))]);
     $unknownTypes = 25;
 
     expect($perType->all())->toBe(['input' => 100, 'output' => 40, 'cacheRead' => 9000, 'cacheCreation' => 300])
-        ->and($perType->sum() + $unknownTypes)->toBe($data['totals']['tokens'])
-        ->and(collect($data['by_model'])->sum('tokens'))->toBe($data['totals']['tokens'])
+        ->and($perType->sum() + $unknownTypes)->toBe(whole($data['totals']['tokens']))
+        ->and(collect($data['by_model'])->sum(fn ($model) => whole($model['tokens'])))->toBe(whole($data['totals']['tokens']))
         ->and($daily->sum(fn ($day) => micros($day['cost_usd'])))->toBe(micros($data['totals']['cost_usd']))
         ->and(collect($data['by_model'])->sum(fn ($model) => micros($model['cost_usd'])))->toBe(micros($data['totals']['cost_usd']));
 });

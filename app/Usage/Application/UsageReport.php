@@ -10,14 +10,14 @@ use DateInterval;
 
 final class UsageReport
 {
-    private const NO_TOKENS = ['input' => 0, 'output' => 0, 'cacheRead' => 0, 'cacheCreation' => 0];
+    private const NO_TOKENS = ['input' => '0', 'output' => '0', 'cacheRead' => '0', 'cacheCreation' => '0'];
 
     public function __construct(private UsageRepository $usage) {}
 
     /**
      * The caller's own usage on the acting team over the last $days UTC days, today included, with every day present.
      *
-     * @return array{days: int, from: string, to: string, daily: list<array{date: string, tokens: array{input: int, output: int, cacheRead: int, cacheCreation: int}, cost_usd: string}>, by_model: list<array{model: string, tokens: int, cost_usd: string}>, totals: array{tokens: int, cost_usd: string}}
+     * @return array{days: int, from: string, to: string, daily: list<array{date: string, tokens: array{input: string, output: string, cacheRead: string, cacheCreation: string}, cost_usd: string}>, by_model: list<array{model: string, tokens: string, cost_usd: string}>, totals: array{tokens: string, cost_usd: string}}
      */
     public function __invoke(AccessContext $context, int $days): array
     {
@@ -25,7 +25,7 @@ final class UsageReport
         $from = $to->sub(new DateInterval('P'.($days - 1).'D'));
         // Like the other dashboard reads, a caller with no team reads zeros; the system context is nobody's own usage.
         $summary = $context->isDenied() || $context->isSystem()
-            ? new UsageSummary([], [], ['tokens' => 0, 'cost_usd' => '0.000000'])
+            ? new UsageSummary([], [], ['tokens' => '0', 'cost_usd' => '0.000000'])
             : $this->usage->summary($context->teamId, $context->userId, $from, $to);
 
         $daily = [];

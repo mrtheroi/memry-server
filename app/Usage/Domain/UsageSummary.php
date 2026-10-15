@@ -9,9 +9,9 @@ namespace App\Usage\Domain;
 final readonly class UsageSummary
 {
     /**
-     * @param  array<string, array{tokens: array{input: int, output: int, cacheRead: int, cacheCreation: int}, cost_usd: string}>  $daily  keyed by "Y-m-d"
-     * @param  list<array{model: string, tokens: int, cost_usd: string}>  $byModel
-     * @param  array{tokens: int, cost_usd: string}  $totals
+     * @param  array<string, array{tokens: array{input: string, output: string, cacheRead: string, cacheCreation: string}, cost_usd: string}>  $daily  keyed by "Y-m-d"
+     * @param  list<array{model: string, tokens: string, cost_usd: string}>  $byModel
+     * @param  array{tokens: string, cost_usd: string}  $totals
      */
     public function __construct(
         public array $daily,

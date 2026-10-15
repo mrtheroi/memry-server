@@ -2,7 +2,6 @@
 
 namespace App\Usage\Infrastructure\Persistence;
 
-use App\Usage\Domain\UsageOverflow;
 use App\Usage\Domain\UsagePoint;
 use App\Usage\Domain\UsageRepository;
 use App\Usage\Domain\UsageSummary;
@@ -59,12 +58,13 @@ final class QueryUsageRepository implements UsageRepository
     public function summary(int $teamId, int $userId, DateTimeImmutable $from, DateTimeImmutable $to): UsageSummary
     {
         $day = 'end_unix_nano / '.self::NANOS_PER_DAY;
-        $tokens = fn (string $type) => "coalesce(sum(value) filter (where metric = 'tokens' and token_type = '{$type}'), 0) as \"{$type}\"";
+        // Token counts leave as exact integer strings: whole by ingest, and never through a PHP int or a JS number.
+        $tokens = fn (string $type) => "coalesce(sum(value) filter (where metric = 'tokens' and token_type = '{$type}'), 0)::numeric(38, 0)::text as \"{$type}\"";
 
         $rows = $this->inRange($teamId, $userId, $from, $to)
             ->selectRaw("grouping({$day}, model) as grouping_set, {$day} as day, model, "
                 .implode(', ', array_map($tokens, self::TOKEN_TYPES)).', '
-                ."coalesce(sum(value) filter (where metric = 'tokens'), 0) as tokens, "
+                ."coalesce(sum(value) filter (where metric = 'tokens'), 0)::numeric(38, 0)::text as tokens, "
                 // Rounded in SQL (exact numeric) so no float error creeps into the 6 decimals.
                 ."round(coalesce(sum(value) filter (where metric = 'cost'), 0), 6) as cost_usd")
             ->groupByRaw("grouping sets (({$day}), (model), ())")
@@ -78,14 +78,14 @@ final class QueryUsageRepository implements UsageRepository
         return new UsageSummary(
             // Only the four known token types are pivoted per day; tokens and by_model count every type.
             ($rows[self::DAY_ROW] ?? collect())->mapWithKeys(fn ($row) => [gmdate('Y-m-d', (int) $row->day * 86400) => [
-                'tokens' => array_combine(self::TOKEN_TYPES, array_map(fn (string $type) => $this->tokens($row->{$type}), self::TOKEN_TYPES)),
+                'tokens' => array_combine(self::TOKEN_TYPES, array_map(fn (string $type) => $row->{$type}, self::TOKEN_TYPES)),
                 'cost_usd' => (string) $row->cost_usd,
             ]])->all(),
             ($rows[self::MODEL_ROW] ?? collect())
-                ->map(fn ($row) => ['model' => $row->model, 'tokens' => $this->tokens($row->tokens), 'cost_usd' => (string) $row->cost_usd])
+                ->map(fn ($row) => ['model' => $row->model, 'tokens' => $row->tokens, 'cost_usd' => (string) $row->cost_usd])
                 ->values()
                 ->all(),
-            ['tokens' => $this->tokens($total->tokens), 'cost_usd' => (string) $total->cost_usd],
+            ['tokens' => $total->tokens, 'cost_usd' => (string) $total->cost_usd],
         );
     }
 
@@ -100,22 +100,6 @@ final class QueryUsageRepository implements UsageRepository
             ->where('user_id', $userId)
             ->where('end_unix_nano', '>=', $this->startOfDayNanos($from))
             ->where('end_unix_nano', '<', $this->startOfDayNanos($to->modify('+1 day')));
-    }
-
-    /**
-     * A token sum as an int, checked: the numeric sum is compared as a decimal string, so a value past int64
-     * throws instead of saturating at PHP_INT_MAX. Sums are never negative (the ingest rejects negative values).
-     */
-    private function tokens(int|string $sum): int
-    {
-        $digits = ltrim(explode('.', (string) $sum)[0], '0') ?: '0';
-        $max = (string) PHP_INT_MAX;
-
-        if (strlen($digits) > strlen($max) || (strlen($digits) === strlen($max) && strcmp($digits, $max) > 0)) {
-            throw UsageOverflow::tokens((string) $sum);
-        }
-
-        return (int) $digits;
     }
 
     private function startOfDayNanos(DateTimeImmutable $day): int

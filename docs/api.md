@@ -100,7 +100,7 @@ Tokens expire after 30 days without use (`MEMRY_TOKEN_IDLE_DAYS`); an expired to
 
 Only **delta** data points (`aggregationTemporality` 1) are stored, which is the Claude Code default. Cumulative points are skipped and reported in the response (below). Values that are exactly zero as sent are skipped (not reported), `model`, `query_source` and `session.id` are cut to 200 characters, and a missing `model` is stored as `unknown`. Points whose time window is not valid int64 nanoseconds are skipped.
 
-**Values.** A point's value is `asInt` (a decimal int64 string, or a JSON integer) or `asDouble` (a finite JSON number). Counters here are monotonic deltas, so a missing value, a non-numeric or out-of-int64-range `asInt`, an array or object, a negative number, `NaN`/`Infinity` (as strings), a `claude_code.token.usage` value that is not exactly a whole number (an `asDouble` such as `1.5`, `3.0000001` or `0.0000001`; `3.0` is fine), a `claude_code.token.usage` value above **1,000,000,000,000** (one trillion tokens, `OtlpMetricsParser::MAX_TOKENS`) or a `claude_code.cost.usage` value above **1,000,000,000** USD (`OtlpMetricsParser::MAX_COST_USD`) is **invalid**. No real delta comes near those limits; they keep the sums `GET /api/usage` computes far from overflowing. Invalid points are skipped, never a server error, and counted in `partialSuccess` (below). Every check is made on the value exactly as sent, before any rounding. Values are then stored as `numeric(38,6)`: cost keeps 6 decimals by contract and is rounded half-up, so a positive cost below half a micro-dollar (for example `0.0000001`) is stored as `0.000000` rather than dropped.
+**Values.** A point's value is `asInt` (a decimal int64 string, or a JSON integer) or `asDouble` (a finite JSON number). Counters here are monotonic deltas, so a missing value, a non-numeric or out-of-int64-range `asInt`, an array or object, a negative number, `NaN`/`Infinity` (as strings), a `claude_code.token.usage` value that is not exactly a whole number (an `asDouble` such as `1.5`, `3.0000001` or `0.0000001`; `3.0` is fine), a `claude_code.token.usage` value above **1,000,000,000,000** (one trillion tokens, `OtlpMetricsParser::MAX_TOKENS`) or a `claude_code.cost.usage` value above **1,000,000,000** USD (`OtlpMetricsParser::MAX_COST_USD`) is **invalid**. No real delta comes near those limits. Invalid points are skipped, never a server error, and counted in `partialSuccess` (below). Every check is made on the value exactly as sent, before any rounding. Values are then stored as `numeric(38,6)`: cost keeps 6 decimals by contract and is rounded half-up, so a positive cost below half a micro-dollar (for example `0.0000001`) is stored as `0.000000` rather than dropped.
 
 **Series identity.** A series is the metric plus the **complete** attribute set of the data point (sorted by key, values normalized to strings, hashed with sha256 into `series_hash`), so points that differ in any attribute (`speed`, `effort`, `skill.name`, `mcp_server.name`, ...) are separate series and are never merged. `model`, `token_type`, `query_source` and `session_id` are also stored as columns for querying. Resource attributes are not part of the identity: they describe the exporter, are constant for it, and include `user.*` values that are never trusted.
 
@@ -259,9 +259,9 @@ Rules:
 ```json
 {"data": {
   "days": 30, "from": "2026-09-15", "to": "2026-10-14",
-  "daily": [{"date": "2026-09-15", "tokens": {"input": 0, "output": 0, "cacheRead": 0, "cacheCreation": 0}, "cost_usd": "0.000000"}],
-  "by_model": [{"model": "claude-sonnet-4-6", "tokens": 9025, "cost_usd": "0.310000"}],
-  "totals": {"tokens": 9175, "cost_usd": "0.750000"}
+  "daily": [{"date": "2026-09-15", "tokens": {"input": "0", "output": "0", "cacheRead": "0", "cacheCreation": "0"}, "cost_usd": "0.000000"}],
+  "by_model": [{"model": "claude-sonnet-4-6", "tokens": "9025", "cost_usd": "0.310000"}],
+  "totals": {"tokens": "9175", "cost_usd": "0.750000"}
 }}
 ```
 
@@ -271,10 +271,10 @@ Rules:
 - **Days are UTC calendar days**, taken from each point's end time (`timeUnixNano`). The window is the last `days` days ending today (UTC), today included, so `from` is `days - 1` days before `to`. Unlike `/api/stats`, `totals` are limited to the window too.
 - **`daily`** has one row per day of the window, oldest first, zero-filled. `tokens` holds the four known Claude Code token types.
 - **Unknown token types.** The ingest stores the `type` attribute as sent and currently drops token points whose type is not one of the four known ones, so today every stored token point is one of them. Should another type ever be stored, it is left out of `daily[].tokens` but still counted in `by_model[].tokens` and `totals.tokens`.
-- **`by_model`** sums tokens (every type) and cost per model within the window, ordered by tokens descending then model ascending. A model with only cost points appears with `tokens: 0`.
+- **`by_model`** sums tokens (every type) and cost per model within the window, ordered by tokens descending then model ascending. A model with only cost points appears with `"tokens": "0"`.
 - **`cost_usd`** is in US dollars, as an **exact decimal string** with exactly 6 decimals (`"10000000000.000001"`, zero is `"0.000000"`), taken straight from the database's `numeric` sum rounded to 6 decimals. It is a string, not a JSON number, because money is never passed through binary floating point: a float cannot hold a value such as `10000000000.000001` and would silently change it. Clients parse it for display (for example with `Number(...)` for a chart, accepting that rounding there, or a decimal library where exactness matters).
 - **One snapshot.** `daily`, `by_model` and `totals` come from a single SQL statement (`GROUP BY GROUPING SETS`), so they always agree: the per-type sums of `daily` plus any unknown types equal `totals.tokens`, and the `by_model` sums equal `totals`, even while new points arrive.
-- **No silent overflow.** A token sum that does not fit a 64-bit integer is an error (`500`), never a saturated number. The ingest limits (see [Values](#otlp-usage-ingest)) keep it out of reach through the API.
+- **Exact strings, never JSON numbers.** Every count and every amount of money in this response (`daily[].tokens.*`, `by_model[].tokens`, `totals.tokens` and every `cost_usd`) is an exact decimal string taken straight from the database's `numeric` sum: tokens as whole numbers with no decimal part (zero is `"0"`), cost with exactly 6 decimals. JSON numbers are read as IEEE doubles in JavaScript and silently lose precision above 2^53 (`Number.MAX_SAFE_INTEGER`), and a PHP integer would stop at 2^63; a string is exact at any size. Clients parse the strings for display.
 
 ## Dashboard: deleting
 
