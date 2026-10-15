@@ -161,6 +161,33 @@ curl -s -b jar -H "Origin: https://app.memry.com.mx" "https://<api-host>/api/mem
 curl -s -b jar -H "Origin: https://app.memry.com.mx" "https://<api-host>/api/memories?cursor=<meta.next_cursor>&project=memry&type=session_summary&per_page=20"
 ```
 
+## Dashboard: stats
+
+`GET /api/stats` feeds the dashboard overview charts. It reports activity derived from the memories that already exist (no new tracking). It works with a dashboard session or a bearer token, is limited to 120 requests per minute per user like the other dashboard reads, and answers `401` without credentials.
+
+| Parameter | Rule |
+| --- | --- |
+| `days` | optional integer from 7 to 365, default 30. Anything else answers `422` |
+
+```json
+{"data": {
+  "range": {"days": 30, "from": "2026-09-15", "to": "2026-10-14"},
+  "totals": {"memories": 128, "projects": 6, "session_summaries": 31},
+  "daily": [{"date": "2026-09-15", "memories": 0, "session_summaries": 0}],
+  "by_type": [{"type": "decision", "count": 12}],
+  "by_project": [{"project": "memry", "count": 20}]
+}}
+```
+
+Rules:
+
+- **Who can see what.** Every number counts only the memories the caller can read, with the same rules as the other dashboard reads: the acting team, the granted projects for a restricted member, and `personal`-scope memories only for their author (another member's personal memories are never counted). A caller with no team gets zeros and empty arrays.
+- **Days are UTC calendar days**, taken from `created_at`. The range is the last `days` days ending today (UTC), today included, so `from` is `days - 1` days before `to`.
+- **`totals`** are all time, not limited to the range. `totals.memories` counts every readable memory, session summaries included, the same way `daily[].memories` does; `session_summaries` is the subset of type `session_summary`. `projects` is the number of distinct projects among the readable memories.
+- **`daily`** has one row per day of the range, oldest first, zero-filled.
+- **`by_type`** counts the memories created within the range, ordered by count descending then type ascending.
+- **`by_project`** counts the memories created within the range, top 10, ordered by count descending then name ascending. Memories without a project are not listed.
+
 ## Dashboard: deleting
 
 `DELETE /api/memories/{id}` hard-deletes one memory (the row is removed; nothing references it, so there are no cascades). It works with a dashboard session or a bearer token and shares the `dashboard` rate limit (120 per minute per user). Under a session it needs the CSRF token like any state-changing request.

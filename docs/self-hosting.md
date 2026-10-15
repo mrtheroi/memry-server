@@ -238,6 +238,8 @@ Read the [CHANGELOG](../CHANGELOG.md) first, then run migrations after updating 
 
 The release after teams (see the CHANGELOG) makes `team_id` NOT NULL on `observations` and `user_prompts`. Upgrade to the teams release first and let it settle, then check before migrating: `docker compose run --rm app memory:backfill-teams --check` must exit 0 (every count 0). If a row still has no team, the migration stops before changing anything, with `Run memory:backfill-teams first: observations has N rows without team_id` (or `user_prompts`); run `docker compose run --rm app memory:backfill-teams`, confirm `--check` reports 0, and run the migration again. It is safe to re-run. If it reports a `check constraint ... is violated`, a row was written without a team while it ran: run the backfill and migrate again. Tokens keep an optional `team_id`.
 
+The migration `canonicalize_legacy_project_names` rewrites legacy project text on memories and prompts to the canonical project name (for example `Alpha`, ` alpha ` and `ALPHA` become `alpha`), in batches of 1000 rows without a long lock. It changes only the `project` column, is safe to re-run and cannot be undone. Installs created after teams are not affected.
+
 With the published image, set `MEMRY_IMAGE` in `.env` to the new release and pull it. Download that release's `docker-compose.yml` and `community.env.example` again and compare them with your copies, since new settings can appear:
 
 ```bash

@@ -3,10 +3,12 @@
 namespace App\Providers;
 
 use App\Memory\Domain\MemoryRepository;
+use App\Memory\Domain\MemoryStatistics;
 use App\Memory\Domain\ProjectCatalog;
 use App\Memory\Domain\ProjectRepository;
 use App\Memory\Domain\PromptRepository;
 use App\Memory\Infrastructure\Persistence\EloquentMemoryRepository;
+use App\Memory\Infrastructure\Persistence\EloquentMemoryStatistics;
 use App\Memory\Infrastructure\Persistence\EloquentPromptRepository;
 use App\Memory\Infrastructure\Persistence\QueryProjectCatalog;
 use App\Memory\Infrastructure\Persistence\QueryProjectRepository;
@@ -36,6 +38,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(PromptRepository::class, EloquentPromptRepository::class);
         $this->app->bind(ProjectRepository::class, QueryProjectRepository::class);
         $this->app->bind(ProjectCatalog::class, QueryProjectCatalog::class);
+        $this->app->bind(MemoryStatistics::class, EloquentMemoryStatistics::class);
         $this->app->bind(TeamSlugs::class, RandomTeamSlugs::class);
         $this->app->bind(AccessContextResolver::class, EloquentAccessContextResolver::class);
         $this->app->bind(ProjectAccessPolicy::class, RoleProjectAccessPolicy::class);

@@ -12,6 +12,7 @@ use App\Http\Controllers\ContextController;
 use App\Http\Controllers\Dashboard\DeleteMemoryController;
 use App\Http\Controllers\Dashboard\ListMemoriesController;
 use App\Http\Controllers\Dashboard\ListProjectsController;
+use App\Http\Controllers\Dashboard\MemoryStatsController;
 use App\Http\Controllers\Dashboard\SearchMemoriesController;
 use App\Http\Controllers\Dashboard\ShowMemoryController;
 use Illuminate\Support\Facades\Route;
@@ -31,6 +32,7 @@ Route::get('/me', MeController::class)->middleware(['auth:sanctum', 'throttle:mc
 Route::delete('/account', DeleteAccountController::class)->middleware(['auth:sanctum', 'throttle:mcp']);
 
 Route::get('/projects', ListProjectsController::class)->middleware(['auth:sanctum', 'throttle:dashboard']);
+Route::get('/stats', MemoryStatsController::class)->middleware(['auth:sanctum', 'throttle:dashboard']);
 Route::get('/memories', ListMemoriesController::class)->middleware(['auth:sanctum', 'throttle:dashboard']);
 Route::get('/memories/search', SearchMemoriesController::class)->middleware(['auth:sanctum', 'throttle:dashboard']);
 Route::get('/memories/{id}', ShowMemoryController::class)->whereNumber('id')->middleware(['auth:sanctum', 'throttle:dashboard']);

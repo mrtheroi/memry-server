@@ -141,7 +141,8 @@ class BackfillTeams
 
         foreach ($rows->groupBy(fn ($row) => ProjectName::normalize($row->project)) as $group) {
             $name = ProjectName::normalize($group->first()->project);
-            $values = ['team_id' => $teamId, 'project_id' => $name === null ? null : $this->projects->getOrCreateId($teamId, $name)];
+            // The raw text becomes the canonical name too, so every reader that compares it agrees with project_id.
+            $values = ['team_id' => $teamId, 'project_id' => $name === null ? null : $this->projects->getOrCreateId($teamId, $name), 'project' => $name];
             if ($audit) {
                 $values += ['created_by' => $userId, 'updated_by' => $userId];
             }
