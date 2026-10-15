@@ -157,14 +157,14 @@ Server settings (see [Security](security.md#dashboard-sessions-cors-and-cookies)
 | `SESSION_DOMAIN` | `.memry.com.mx` | Lets the session and `XSRF-TOKEN` cookies be shared between the app and API subdomains |
 | `SESSION_SECURE_COOKIE` | `true` | Send cookies over HTTPS only; set it in production |
 
-The flow, from the SPA (every request with credentials: `fetch(..., {credentials: "include"})` or `withCredentials: true`):
+The flow, shown with `curl` (the SPA sends every request with `fetch(..., {credentials: "include"})`):
 
 ```bash
 # 1. Get the CSRF cookie. 204, sets XSRF-TOKEN and the session cookie.
 curl -s -c jar -H "Origin: https://app.memry.com.mx" https://<api-host>/sanctum/csrf-cookie
 
 # 2. Request the code (same endpoint as the CLI): 202
-# 3. Open the session. Echo the XSRF-TOKEN cookie in the X-XSRF-TOKEN header (axios and most clients do it automatically).
+# 3. Open the session. Echo the XSRF-TOKEN cookie in the X-XSRF-TOKEN header.
 curl -s -b jar -c jar -X POST https://<api-host>/api/session \
   -H "Origin: https://app.memry.com.mx" -H "X-XSRF-TOKEN: <XSRF-TOKEN cookie value>" \
   -H "Content-Type: application/json" -d '{"email":"ada@example.com","code":"042917"}'
@@ -182,7 +182,27 @@ curl -s -b jar -c jar -X DELETE https://<api-host>/api/session \
 
 Every state-changing request (`POST`, `DELETE`) needs the `X-XSRF-TOKEN` header; without it the server answers `419`.
 
-Axios only copies the `XSRF-TOKEN` cookie into `X-XSRF-TOKEN` automatically on same-origin requests. For a cross-origin SPA (app and API on different subdomains) set both `withCredentials: true` and `withXSRFToken: true` (Axios 1.6 or newer), or read the `XSRF-TOKEN` cookie yourself and send it in the `X-XSRF-TOKEN` header.
+The dashboard uses native `fetch`, which never sends the header by itself. Call `GET /sanctum/csrf-cookie` first, send every request with `credentials: "include"`, and on unsafe requests read the `XSRF-TOKEN` cookie, decode it and send it as `X-XSRF-TOKEN`:
+
+```js
+const api = "https://<api-host>";
+
+function xsrfToken() {
+  const cookie = document.cookie.split("; ").find((c) => c.startsWith("XSRF-TOKEN="));
+  return cookie ? decodeURIComponent(cookie.slice("XSRF-TOKEN=".length)) : "";
+}
+
+await fetch(`${api}/sanctum/csrf-cookie`, { credentials: "include" });
+
+await fetch(`${api}/api/session`, {
+  method: "POST",
+  credentials: "include",
+  headers: { "Content-Type": "application/json", Accept: "application/json", "X-XSRF-TOKEN": xsrfToken() },
+  body: JSON.stringify({ email: "ada@example.com", code: "042917" }),
+});
+```
+
+The cookie is URL-encoded, so send the decoded value; the raw one fails with `419`. Other clients, such as Axios, need the equivalent settings (credentials on and the `X-XSRF-TOKEN` header on cross-origin requests).
 
 `POST /api/session` is only available to requests from a stateful domain: from any other origin (or without `Origin`/`Referer`) it answers `403 Session login is only available to the dashboard origin.` without consuming the code, so use `POST /api/auth/token` there.
 
