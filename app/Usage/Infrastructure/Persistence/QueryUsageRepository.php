@@ -4,10 +4,22 @@ namespace App\Usage\Infrastructure\Persistence;
 
 use App\Usage\Domain\UsagePoint;
 use App\Usage\Domain\UsageRepository;
+use App\Usage\Domain\UsageSummary;
+use DateTimeImmutable;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
 
 final class QueryUsageRepository implements UsageRepository
 {
+    private const NANOS_PER_DAY = 86_400_000_000_000;
+
+    private const TOKEN_TYPES = ['input', 'output', 'cacheRead', 'cacheCreation'];
+
+    private const TOTAL_TOKENS = "coalesce(sum(value) filter (where metric = 'tokens'), 0) as tokens";
+
+    // Rounded in SQL (exact numeric) so no float error creeps into the 6 decimals.
+    private const TOTAL_COST = "round(coalesce(sum(value) filter (where metric = 'cost'), 0), 6) as cost_usd";
+
     public function record(int $teamId, int $userId, array $points): int
     {
         if ($points === []) {
@@ -33,5 +45,82 @@ final class QueryUsageRepository implements UsageRepository
             'value' => $point->value,
             'created_at' => $now,
         ], $points));
+    }
+
+    public function summary(int $teamId, int $userId, DateTimeImmutable $from, DateTimeImmutable $to): UsageSummary
+    {
+        return new UsageSummary(
+            $this->daily($teamId, $userId, $from, $to),
+            $this->byModel($teamId, $userId, $from, $to),
+            $this->totals($teamId, $userId, $from, $to),
+        );
+    }
+
+    /**
+     * Integer division of the end time buckets each point on its UTC day (days since the epoch).
+     * Only the four known token types are pivoted.
+     *
+     * @return array<string, array{tokens: array{input: int, output: int, cacheRead: int, cacheCreation: int}, cost_usd: float}>
+     */
+    private function daily(int $teamId, int $userId, DateTimeImmutable $from, DateTimeImmutable $to): array
+    {
+        $tokens = fn (string $type) => "coalesce(sum(value) filter (where metric = 'tokens' and token_type = '{$type}'), 0) as \"{$type}\"";
+
+        return $this->inRange($teamId, $userId, $from, $to)
+            ->selectRaw('end_unix_nano / '.self::NANOS_PER_DAY.' as day, '
+                .implode(', ', array_map($tokens, self::TOKEN_TYPES)).', '
+                .self::TOTAL_COST)
+            ->groupByRaw('end_unix_nano / '.self::NANOS_PER_DAY)
+            ->get()
+            ->mapWithKeys(fn ($row) => [gmdate('Y-m-d', (int) $row->day * 86400) => [
+                'tokens' => array_combine(self::TOKEN_TYPES, array_map(fn (string $type) => (int) $row->{$type}, self::TOKEN_TYPES)),
+                'cost_usd' => (float) $row->cost_usd,
+            ]])
+            ->all();
+    }
+
+    /**
+     * Every token type counts here, including any the daily pivot leaves out.
+     *
+     * @return list<array{model: string, tokens: int, cost_usd: float}>
+     */
+    private function byModel(int $teamId, int $userId, DateTimeImmutable $from, DateTimeImmutable $to): array
+    {
+        return $this->inRange($teamId, $userId, $from, $to)
+            ->selectRaw('model, '.self::TOTAL_TOKENS.', '.self::TOTAL_COST)
+            ->groupBy('model')
+            ->orderByDesc('tokens')
+            ->orderBy('model')
+            ->get()
+            ->map(fn ($row) => ['model' => $row->model, 'tokens' => (int) $row->tokens, 'cost_usd' => (float) $row->cost_usd])
+            ->all();
+    }
+
+    /**
+     * @return array{tokens: int, cost_usd: float}
+     */
+    private function totals(int $teamId, int $userId, DateTimeImmutable $from, DateTimeImmutable $to): array
+    {
+        $row = $this->inRange($teamId, $userId, $from, $to)->selectRaw(self::TOTAL_TOKENS.', '.self::TOTAL_COST)->first();
+
+        return ['tokens' => (int) $row->tokens, 'cost_usd' => (float) $row->cost_usd];
+    }
+
+    /**
+     * The user's own points on the team that end from the start of $from through the end of $to (UTC days);
+     * the (team_id, user_id, end_unix_nano) index serves this range.
+     */
+    private function inRange(int $teamId, int $userId, DateTimeImmutable $from, DateTimeImmutable $to): Builder
+    {
+        return DB::table('usage_points')
+            ->where('team_id', $teamId)
+            ->where('user_id', $userId)
+            ->where('end_unix_nano', '>=', $this->startOfDayNanos($from))
+            ->where('end_unix_nano', '<', $this->startOfDayNanos($to->modify('+1 day')));
+    }
+
+    private function startOfDayNanos(DateTimeImmutable $day): int
+    {
+        return intdiv($day->getTimestamp(), 86400) * self::NANOS_PER_DAY;
     }
 }

@@ -248,6 +248,32 @@ Rules:
 - **`by_type`** counts the memories created within the range, ordered by count descending then type ascending.
 - **`by_project`** counts the memories created within the range, top 10, ordered by count descending then name ascending. Memories without a project are not listed.
 
+## Dashboard: token usage
+
+`GET /api/usage` feeds the dashboard's "Token usage" chart with the caller's own Claude Code usage, read from the points stored by the [OTLP usage ingest](#otlp-usage-ingest). It works with a dashboard session or a full-access bearer token (the `usage:write`-only token answers `403`), is limited to 120 requests per minute per user like the other dashboard reads, and answers `401` without credentials.
+
+| Parameter | Rule |
+| --- | --- |
+| `days` | optional integer from 1 to 90, default 30. Anything else answers `422` |
+
+```json
+{
+  "days": 30, "from": "2026-09-15", "to": "2026-10-14",
+  "daily": [{"date": "2026-09-15", "tokens": {"input": 0, "output": 0, "cacheRead": 0, "cacheCreation": 0}, "cost_usd": 0}],
+  "by_model": [{"model": "claude-sonnet-4-6", "tokens": 9025, "cost_usd": 0.31}],
+  "totals": {"tokens": 9175, "cost_usd": 0.75}
+}
+```
+
+Rules:
+
+- **Who can see what.** Only the caller's own usage on the acting team (the same team resolution as the other dashboard reads). Other members' usage and the caller's usage on other teams are never counted. A caller with no team gets zeros and an empty `by_model`.
+- **Days are UTC calendar days**, taken from each point's end time (`timeUnixNano`). The window is the last `days` days ending today (UTC), today included, so `from` is `days - 1` days before `to`. Unlike `/api/stats`, `totals` are limited to the window too.
+- **`daily`** has one row per day of the window, oldest first, zero-filled. `tokens` holds the four known Claude Code token types.
+- **Unknown token types.** The ingest stores the `type` attribute as sent and currently drops token points whose type is not one of the four known ones, so today every stored token point is one of them. Should another type ever be stored, it is left out of `daily[].tokens` but still counted in `by_model[].tokens` and `totals.tokens`.
+- **`by_model`** sums tokens (every type) and cost per model within the window, ordered by tokens descending then model ascending. A model with only cost points appears with `tokens: 0`.
+- **`cost_usd`** is in US dollars, rounded to 6 decimals.
+
 ## Dashboard: deleting
 
 `DELETE /api/memories/{id}` hard-deletes one memory (the row is removed; nothing references it, so there are no cascades). It works with a dashboard session or a bearer token and shares the `dashboard` rate limit (120 per minute per user). Under a session it needs the CSRF token like any state-changing request.
