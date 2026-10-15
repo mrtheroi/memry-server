@@ -320,6 +320,23 @@ test('a token point over one trillion is invalid and nothing is stored', functio
     expect(usageTotals()['rows'])->toBe(0);
 });
 
+test('a fractional token asDouble is invalid and nothing is stored', function () {
+    $this->withToken(ingestToken(User::factory()->create()))
+        ->postJson('/api/otlp/v1/metrics', otlp(sumMetric('claude_code.token.usage', [[...tokenPoint('input', '1'), 'asInt' => null, 'asDouble' => 1.5]])))
+        ->assertOk()
+        ->assertJsonPath('partialSuccess.rejectedDataPoints', '1');
+
+    expect(usageTotals()['rows'])->toBe(0);
+});
+
+test('a whole token asDouble such as 3.0 is stored', function () {
+    $this->withToken(ingestToken(User::factory()->create()))
+        ->postJson('/api/otlp/v1/metrics', otlp(sumMetric('claude_code.token.usage', [[...tokenPoint('input', '1'), 'asInt' => null, 'asDouble' => 3.0]])))
+        ->assertOk()->assertExactJson([]);
+
+    expect(usageTotals())->toBe(['rows' => 1, 'tokens' => '3.000000', 'cost' => '0']);
+});
+
 test('a cost point over one billion USD is invalid, and exactly one billion is stored', function () {
     $cost = fn (float|int $usd, string $end) => ['attributes' => attrs(['model' => 'm']), 'startTimeUnixNano' => '1', 'timeUnixNano' => $end, 'asDouble' => $usd];
 

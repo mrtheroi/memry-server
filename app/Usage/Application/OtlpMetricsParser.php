@@ -224,8 +224,8 @@ final class OtlpMetricsParser
     /**
      * The value of the data point's oneof (`asInt` or `asDouble`) as a decimal string; null for a zero
      * (nothing to count); false when it is missing or not a valid monotonic delta: not a decimal int64
-     * string/int, not a finite number, negative, too large for the numeric(38,6) column, or above the
-     * metric's limit.
+     * string/int, not a finite number, negative, too large for the numeric(38,6) column, above the
+     * metric's limit, or a token count that is not a whole number.
      *
      * @param  array<mixed>  $dataPoint
      */
@@ -233,7 +233,14 @@ final class OtlpMetricsParser
     {
         $value = $this->rawValue($dataPoint);
 
-        return is_string($value) && (float) $value > self::MAX_VALUE[$kind->value] ? false : $value;
+        if (! is_string($value)) {
+            return $value;
+        }
+
+        // Tokens are whole by nature: a fractional count (an asDouble like 1.5) is invalid, never truncated later.
+        $fractional = $kind === UsageMetric::Tokens && ! preg_match('/^\d+(\.0+)?$/', $value);
+
+        return $fractional || (float) $value > self::MAX_VALUE[$kind->value] ? false : $value;
     }
 
     /**
