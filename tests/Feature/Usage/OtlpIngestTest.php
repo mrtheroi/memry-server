@@ -235,11 +235,11 @@ test('the otlp rate limit is 120 requests per minute per user', function () {
 
     foreach (range(1, 120) as $_) {
         app('auth')->forgetGuards();
-        $this->withToken($token)->postJson('/api/otlp/v1/metrics', [])->assertOk();
+        $this->withToken($token)->postJson('/api/otlp/v1/metrics', ['resourceMetrics' => []])->assertOk();
     }
 
     app('auth')->forgetGuards();
-    $this->withToken($token)->postJson('/api/otlp/v1/metrics', [])->assertStatus(429);
+    $this->withToken($token)->postJson('/api/otlp/v1/metrics', ['resourceMetrics' => []])->assertStatus(429);
 });
 
 test('absent optional attributes are stored as empty strings so the unique index covers them', function () {
@@ -340,3 +340,27 @@ test('rejected data points still count against the 5000 cap', function () {
 
     $this->withToken($token)->postJson('/api/otlp/v1/metrics', $export)->assertStatus(413);
 });
+
+test('an empty JSON object or list in the wrong place is a 400, not an empty export', function (string $body) {
+    $token = ingestToken(User::factory()->create());
+
+    rawIngest($token, $body)->assertStatus(400)->assertJsonStructure(['message']);
+
+    expect(usageTotals()['rows'])->toBe(0);
+})->with([
+    'top level empty list' => '[]',
+    'resourceMetrics object' => '{"resourceMetrics":{}}',
+    'scopeMetrics object' => '{"resourceMetrics":[{"scopeMetrics":{}}]}',
+    'metrics object' => '{"resourceMetrics":[{"scopeMetrics":[{"metrics":{}}]}]}',
+    'dataPoints object' => '{"resourceMetrics":[{"scopeMetrics":[{"metrics":[{"name":"claude_code.token.usage","sum":{"aggregationTemporality":1,"dataPoints":{}}}]}]}]}',
+    'sum list' => '{"resourceMetrics":[{"scopeMetrics":[{"metrics":[{"name":"claude_code.token.usage","sum":[]}]}]}]}',
+    'attributes object' => '{"resourceMetrics":[{"scopeMetrics":[{"metrics":[{"name":"claude_code.token.usage","sum":{"aggregationTemporality":1,"dataPoints":[{"attributes":{},"asInt":"1","startTimeUnixNano":"1","timeUnixNano":"2"}]}}]}]}]}',
+]);
+
+test('valid empty exports are still accepted', function (string $body) {
+    $token = ingestToken(User::factory()->create());
+
+    rawIngest($token, $body)->assertOk()->assertExactJson([]);
+
+    expect(usageTotals()['rows'])->toBe(0);
+})->with(['{}', '{"resourceMetrics":[]}', '{"resourceMetrics":[{"scopeMetrics":[]}]}']);

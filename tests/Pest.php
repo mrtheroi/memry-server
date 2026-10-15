@@ -9,6 +9,8 @@ use App\Team\Domain\ProjectAccess;
 use App\Team\Domain\ProjectAccessPolicy;
 use App\Team\Domain\Role;
 use App\Team\Infrastructure\Persistence\TeamRecord;
+use App\Usage\Application\OtlpMetricsParser;
+use App\Usage\Domain\ParsedUsage;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Mcp\Server\Testing\TestResponse;
 use PHPUnit\Framework\Assert;
@@ -241,4 +243,10 @@ function tokenPoint(string $type, string $value, string $model = 'claude-opus-4-
         'timeUnixNano' => $end,
         'asInt' => $value,
     ];
+}
+
+/** Runs the parser on a payload built as a PHP array, decoded the way the controller decodes the body. */
+function parseOtlp(array|stdClass $payload): ParsedUsage
+{
+    return (new OtlpMetricsParser)(json_decode(json_encode($payload)));
 }

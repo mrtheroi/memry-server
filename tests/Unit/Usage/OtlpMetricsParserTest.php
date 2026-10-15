@@ -1,12 +1,11 @@
 <?php
 
-use App\Usage\Application\OtlpMetricsParser;
 use App\Usage\Domain\InvalidOtlpPayload;
 use App\Usage\Domain\TooManyPoints;
 use App\Usage\Domain\UsageMetric;
 
 it('parses claude code token and cost delta points', function () {
-    $parsed = (new OtlpMetricsParser)(otlp(
+    $parsed = parseOtlp(otlp(
         sumMetric('claude_code.token.usage', [tokenPoint('input', '120'), tokenPoint('cacheRead', '4500', 'claude-sonnet-4-6')]),
         sumMetric('claude_code.cost.usage', [[
             'attributes' => attrs(['model' => 'claude-opus-4-7', 'query_source' => 'main', 'session.id' => 'sess-1']),
@@ -36,7 +35,7 @@ it('parses claude code token and cost delta points', function () {
 });
 
 it('ignores metrics it does not know', function () {
-    $parsed = (new OtlpMetricsParser)(otlp(
+    $parsed = parseOtlp(otlp(
         sumMetric('claude_code.session.count', [['attributes' => [], 'startTimeUnixNano' => '1', 'timeUnixNano' => '2', 'asInt' => '1']]),
         ['name' => 'claude_code.active_time.total', 'gauge' => ['dataPoints' => []]],
         sumMetric('claude_code.token.usage', [tokenPoint('output', '7')]),
@@ -47,7 +46,7 @@ it('ignores metrics it does not know', function () {
 });
 
 it('skips cumulative points and counts them as rejected', function () {
-    $parsed = (new OtlpMetricsParser)(otlp(
+    $parsed = parseOtlp(otlp(
         sumMetric('claude_code.token.usage', [tokenPoint('input', '10'), tokenPoint('output', '20')], 2),
         sumMetric('claude_code.cost.usage', [tokenPoint('input', '1')], 'AGGREGATION_TEMPORALITY_CUMULATIVE'),
         sumMetric('claude_code.token.usage', [tokenPoint('input', '5')], 'AGGREGATION_TEMPORALITY_DELTA'),
@@ -61,7 +60,7 @@ it('skips cumulative points and counts them as rejected', function () {
 it('skips zero values and parses asInt strings and asDouble numbers', function () {
     $double = fn (float|int $v) => ['attributes' => attrs(['model' => 'm']), 'startTimeUnixNano' => '1', 'timeUnixNano' => '2', 'asDouble' => $v];
 
-    $parsed = (new OtlpMetricsParser)(otlp(
+    $parsed = parseOtlp(otlp(
         sumMetric('claude_code.token.usage', [tokenPoint('input', '0'), tokenPoint('output', '9007199254740993')]),
         sumMetric('claude_code.cost.usage', [$double(0), $double(0.0000001), $double(2), $double(0.5)]),
     ));
@@ -73,7 +72,7 @@ it('caps attribute lengths, defaults a missing model and skips token points of a
     $long = str_repeat('é', 300);
     $noModel = ['attributes' => attrs(['type' => 'input']), 'startTimeUnixNano' => '1', 'timeUnixNano' => '2', 'asInt' => '3'];
 
-    $parsed = (new OtlpMetricsParser)(otlp(sumMetric('claude_code.token.usage', [
+    $parsed = parseOtlp(otlp(sumMetric('claude_code.token.usage', [
         tokenPoint('input', '1', $long),
         $noModel,
         tokenPoint('bogus', '4'),
@@ -88,12 +87,12 @@ it('caps attribute lengths, defaults a missing model and skips token points of a
 });
 
 it('accepts an empty export request', function () {
-    expect((new OtlpMetricsParser)([])->points)->toBe([])
-        ->and((new OtlpMetricsParser)(['resourceMetrics' => []])->points)->toBe([]);
+    expect(parseOtlp(new stdClass)->points)->toBe([])
+        ->and(parseOtlp(['resourceMetrics' => []])->points)->toBe([]);
 });
 
 it('rejects a payload of the wrong shape', function (array $payload) {
-    (new OtlpMetricsParser)($payload);
+    parseOtlp($payload);
 })->with([
     'top level list' => [[1, 2]],
     'resourceMetrics not a list' => [['resourceMetrics' => 'x']],
@@ -120,7 +119,7 @@ it('rejects a payload of the wrong shape', function (array $payload) {
 it('keeps only data points with a valid time window', function () {
     $withTime = fn (mixed $start, mixed $end) => ['attributes' => attrs(['type' => 'input', 'model' => 'm']), 'startTimeUnixNano' => $start, 'timeUnixNano' => $end, 'asInt' => '1'];
 
-    $parsed = (new OtlpMetricsParser)(otlp(sumMetric('claude_code.token.usage', [
+    $parsed = parseOtlp(otlp(sumMetric('claude_code.token.usage', [
         $withTime('1760000000000000000', '1760000060000000000'),
         $withTime(1760000000000000000, 1760000060000000000),
         $withTime('abc', '2'),
@@ -137,13 +136,13 @@ it('keeps only data points with a valid time window', function () {
 it('refuses more than 5000 points in one request', function () {
     $points = array_fill(0, 5001, tokenPoint('input', '1'));
 
-    (new OtlpMetricsParser)(otlp(sumMetric('claude_code.token.usage', $points)));
+    parseOtlp(otlp(sumMetric('claude_code.token.usage', $points)));
 })->throws(TooManyPoints::class);
 
 it('accepts exactly 5000 points', function () {
     $points = array_fill(0, 5000, tokenPoint('input', '1'));
 
-    expect((new OtlpMetricsParser)(otlp(sumMetric('claude_code.token.usage', $points)))->points)->toHaveCount(5000);
+    expect(parseOtlp(otlp(sumMetric('claude_code.token.usage', $points)))->points)->toHaveCount(5000);
 });
 
 it('hashes the whole attribute set of the data point as the series identity', function () {
@@ -156,7 +155,7 @@ it('hashes the whole attribute set of the data point as the series identity', fu
             ]])]]],
         ]],
     ];
-    $hash = fn (array $payload) => (new OtlpMetricsParser)($payload)->points[0]->seriesHash;
+    $hash = fn (array $payload) => parseOtlp($payload)->points[0]->seriesHash;
 
     $base = $hash($point([]));
 
@@ -168,7 +167,7 @@ it('hashes the whole attribute set of the data point as the series identity', fu
 });
 
 it('normalizes attribute values of every OTLP type to strings in the identity', function () {
-    $withValue = fn (array $value) => (new OtlpMetricsParser)(otlp(sumMetric('claude_code.token.usage', [[
+    $withValue = fn (array $value) => parseOtlp(otlp(sumMetric('claude_code.token.usage', [[
         'attributes' => [['key' => 'type', 'value' => ['stringValue' => 'input']], ['key' => 'flag', 'value' => $value]],
         'startTimeUnixNano' => '1', 'timeUnixNano' => '2', 'asInt' => '5',
     ]])))->points[0]->seriesHash;
@@ -180,7 +179,7 @@ it('normalizes attribute values of every OTLP type to strings in the identity', 
 });
 
 it('rejects and counts data points with an invalid value instead of failing', function (array $value) {
-    $parsed = (new OtlpMetricsParser)(otlp(sumMetric('claude_code.token.usage', [
+    $parsed = parseOtlp(otlp(sumMetric('claude_code.token.usage', [
         [...tokenPoint('input', '1'), 'asInt' => null, ...$value],
         tokenPoint('output', '3'),
     ])));
@@ -206,7 +205,7 @@ it('rejects and counts data points with an invalid value instead of failing', fu
 ]);
 
 it('accepts the int64 maximum, and an asInt given as a JSON number', function () {
-    $parsed = (new OtlpMetricsParser)(otlp(sumMetric('claude_code.token.usage', [
+    $parsed = parseOtlp(otlp(sumMetric('claude_code.token.usage', [
         tokenPoint('input', '9223372036854775807'),
         [...tokenPoint('output', '1'), 'asInt' => 42],
     ])));
@@ -219,7 +218,7 @@ it('accepts the int64 maximum, and an asInt given as a JSON number', function ()
 it('counts every data point of a known metric against the cap, valid or not', function (callable $makePoint, int|string $temporality) {
     $points = array_fill(0, 5001, $makePoint());
 
-    (new OtlpMetricsParser)(otlp(sumMetric('claude_code.token.usage', $points, $temporality)));
+    parseOtlp(otlp(sumMetric('claude_code.token.usage', $points, $temporality)));
 })->with([
     'cumulative' => [fn () => tokenPoint('input', '1'), 2],
     'zero' => [fn () => tokenPoint('input', '0'), 1],
@@ -231,7 +230,7 @@ it('counts every data point of a known metric against the cap, valid or not', fu
 it('accepts exactly 5000 data points of a mix of valid and skipped ones', function () {
     $points = [...array_fill(0, 2000, tokenPoint('input', '1')), ...array_fill(0, 2000, tokenPoint('input', '0')), ...array_fill(0, 1000, tokenPoint('bogus', '1'))];
 
-    $parsed = (new OtlpMetricsParser)(otlp(sumMetric('claude_code.token.usage', $points)));
+    $parsed = parseOtlp(otlp(sumMetric('claude_code.token.usage', $points)));
 
     expect($parsed->points)->toHaveCount(2000);
 });
@@ -239,5 +238,5 @@ it('accepts exactly 5000 data points of a mix of valid and skipped ones', functi
 it('does not count the data points of unknown metrics against the cap', function () {
     $points = array_fill(0, 6000, tokenPoint('input', '1'));
 
-    expect((new OtlpMetricsParser)(otlp(sumMetric('some.other.metric', $points)))->points)->toBe([]);
+    expect(parseOtlp(otlp(sumMetric('some.other.metric', $points)))->points)->toBe([]);
 });

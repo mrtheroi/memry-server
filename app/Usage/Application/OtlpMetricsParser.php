@@ -7,6 +7,7 @@ use App\Usage\Domain\ParsedUsage;
 use App\Usage\Domain\TooManyPoints;
 use App\Usage\Domain\UsageMetric;
 use App\Usage\Domain\UsagePoint;
+use stdClass;
 
 /**
  * Reads the OTLP/HTTP JSON encoding of an ExportMetricsServiceRequest, keeping only the delta
@@ -30,12 +31,17 @@ final class OtlpMetricsParser
     // Keeps a double within numeric(38,6), which has 32 integer digits.
     private const MAX_DOUBLE = 1.0e30;
 
-    /** @param array<mixed> $payload */
-    public function __invoke(array $payload): ParsedUsage
+    /**
+     * @param  mixed  $payload  the body decoded with json_decode(..., false): JSON objects are stdClass and
+     *                          JSON arrays are lists, so an empty `{}` is never mistaken for an empty `[]`
+     */
+    public function __invoke(mixed $payload): ParsedUsage
     {
-        if ($payload !== [] && array_is_list($payload)) {
+        if (! $payload instanceof stdClass) {
             throw InvalidOtlpPayload::expected('a JSON object');
         }
+
+        $payload = (array) $payload;
 
         $points = [];
         $rejected = 0;
@@ -87,7 +93,8 @@ final class OtlpMetricsParser
     }
 
     /**
-     * The list of objects under $key; an absent or null key is an empty list, anything else is a bad shape.
+     * The list of objects under $key (as arrays); absent or null is an empty list, anything else, including a
+     * JSON object, is a bad shape.
      *
      * @param  array<mixed>  $node
      * @return list<array<mixed>>
@@ -96,15 +103,15 @@ final class OtlpMetricsParser
     {
         $items = $node[$key] ?? [];
 
-        if (! is_array($items) || ! array_is_list($items) || array_filter($items, fn ($item) => ! is_array($item))) {
+        if (! is_array($items) || ! array_is_list($items) || array_filter($items, fn ($item) => ! $item instanceof stdClass)) {
             throw InvalidOtlpPayload::expected("a list of objects at {$key}");
         }
 
-        return $items;
+        return array_map(fn (stdClass $item) => (array) $item, $items);
     }
 
     /**
-     * The object under $key, or null when absent.
+     * The JSON object under $key (as an array), or null when absent; a list or scalar is a bad shape.
      *
      * @param  array<mixed>  $node
      * @return array<mixed>|null
@@ -113,7 +120,11 @@ final class OtlpMetricsParser
     {
         $value = $node[$key] ?? null;
 
-        return $value === null || is_array($value) ? $value : throw InvalidOtlpPayload::expected("an object at {$key}");
+        return match (true) {
+            $value === null => null,
+            $value instanceof stdClass => (array) $value,
+            default => throw InvalidOtlpPayload::expected("an object at {$key}"),
+        };
     }
 
     /** @param array<mixed> $node */

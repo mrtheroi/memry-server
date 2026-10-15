@@ -34,8 +34,7 @@ class OtlpMetricsController extends Controller
         }
 
         try {
-            $payload = json_decode($body, true, 32, JSON_THROW_ON_ERROR);
-            $parsed = $parse(is_array($payload) ? $payload : throw InvalidOtlpPayload::expected('a JSON object'));
+            $parsed = $parse(json_decode($body, false, 32, JSON_THROW_ON_ERROR));
         } catch (JsonException) {
             return $this->error('The request body is not valid JSON.', 400);
         } catch (InvalidOtlpPayload $e) {
