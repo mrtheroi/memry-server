@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
+use App\Models\User;
 use App\Team\Domain\AccessContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -20,6 +21,8 @@ class UsageTokenController extends Controller
 
         // Rotation: delete and create in one transaction so a user never holds two usage tokens.
         $token = DB::transaction(function () use ($user, $context) {
+            // Lock order: the user row first, so two rotations for the same user serialize.
+            User::whereKey($user->id)->lockForUpdate()->first();
             $user->tokens()->where('name', 'memry-usage')->delete();
 
             return $user->createTeamToken('memry-usage', $context->teamId, ['usage:write']);

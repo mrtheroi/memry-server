@@ -2,6 +2,7 @@
 
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 
 uses(RefreshDatabase::class);
 
@@ -92,4 +93,25 @@ test('it answers 403 and creates nothing when the token team has no membership f
         ->assertJsonStructure(['message']);
 
     expect($user->tokens()->where('name', 'memry-usage')->exists())->toBeFalse();
+});
+
+test('it locks the user row before deleting and inserting so rotations serialize', function () {
+    $user = User::factory()->create();
+    $full = fullTokenFor($user);
+
+    $queries = [];
+    DB::listen(function ($query) use (&$queries) {
+        $queries[] = strtolower($query->sql);
+    });
+
+    $this->withToken($full)->postJson('/api/auth/usage-token')->assertCreated();
+
+    $position = fn (callable $match) => collect($queries)->search($match);
+    $lock = $position(fn ($sql) => str_contains($sql, 'from "users"') && str_contains($sql, 'for update'));
+    $delete = $position(fn ($sql) => str_starts_with($sql, 'delete from "personal_access_tokens"'));
+    $insert = $position(fn ($sql) => str_starts_with($sql, 'insert into "personal_access_tokens"'));
+
+    expect($lock)->not->toBeFalse()
+        ->and($lock)->toBeLessThan($delete)
+        ->and($delete)->toBeLessThan($insert);
 });
