@@ -14,7 +14,7 @@ return new class extends Migration
             $table->foreignId('team_id')->constrained()->cascadeOnDelete();
             $table->foreignId('user_id')->constrained()->cascadeOnDelete();
             $table->string('metric', 10);
-            // sha256 of the metric name plus the complete data point attribute set: the series identity.
+            // HMAC-SHA256 (key derived from APP_KEY) of the metric name plus the complete data point attribute set: the series identity.
             $table->char('series_hash', 64);
             $table->string('model', 200);
             $table->string('token_type', 20)->default('');
