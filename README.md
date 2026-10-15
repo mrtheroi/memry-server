@@ -4,7 +4,7 @@
 
 # memry-server
 
-Version **0.19.0** · [Changelog](CHANGELOG.md)
+Version **0.20.0** · [Changelog](CHANGELOG.md)
 
 This is the server behind memry: a hosted, persistent memory MCP server for AI agents. Agents save and recall knowledge (decisions, bug fixes, conventions, session summaries) across sessions and projects.
 
@@ -26,10 +26,10 @@ Local setup, tests, configuration, deployment and the rest of the developer refe
 To run your own server, you need Docker with Compose v2 ([get Docker](https://docs.docker.com/get-docker/)). One script starts memry Community and connects your agents:
 
 ```bash
-f=$(mktemp) && curl -fsSLo "$f" https://raw.githubusercontent.com/mrtheroi/memry-server/v0.19.0/install.sh && sh "$f" --email YOUR_EMAIL
+f=$(mktemp) && curl -fsSLo "$f" https://raw.githubusercontent.com/mrtheroi/memry-server/v0.20.0/install.sh && sh "$f" --email YOUR_EMAIL
 ```
 
-Replace `YOUR_EMAIL` with your email. The script downloads to a new temporary file, so it never overwrites a file in the current directory, and only runs if the download succeeded. To read it first (recommended): `curl -fsSL https://raw.githubusercontent.com/mrtheroi/memry-server/v0.19.0/install.sh | less`. It downloads the release's `docker-compose.yml`, writes a `.env` with a generated `APP_KEY` and database password to `~/memry-community`, starts PostgreSQL and the server, and, once the memry CLI is ready (installed with Homebrew if needed), creates your user and a token and runs `memry setup` with it. Without the CLI it prints no token, only the command to create one. Options, the manual setup and the rest of the guide are in [docs/self-hosting.md](docs/self-hosting.md).
+Replace `YOUR_EMAIL` with your email. The script downloads to a new temporary file, so it never overwrites a file in the current directory, and only runs if the download succeeded. To read it first (recommended): `curl -fsSL https://raw.githubusercontent.com/mrtheroi/memry-server/v0.20.0/install.sh | less`. It downloads the release's `docker-compose.yml`, writes a `.env` with a generated `APP_KEY` and database password to `~/memry-community`, starts PostgreSQL and the server, and, once the memry CLI is ready (installed with Homebrew if needed), creates your user and a token and runs `memry setup` with it. Without the CLI it prints no token, only the command to create one. Options, the manual setup and the rest of the guide are in [docs/self-hosting.md](docs/self-hosting.md).
 
 ## License
 
