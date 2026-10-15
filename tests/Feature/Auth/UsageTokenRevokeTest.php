@@ -116,3 +116,18 @@ test('a usage token cannot revoke usage tokens', function () {
 test('it requires authentication to revoke usage tokens', function () {
     $this->deleteJson('/api/auth/usage-tokens')->assertUnauthorized();
 });
+
+test('keep spares usage tokens issued after it, so overlapping clients do not revoke each other', function () {
+    $user = User::factory()->create();
+    $full = $user->createTeamToken('memry-cli', contextFor($user)->teamId);
+    $older = usageTokenIdFor($user);
+    $a = usageTokenIdFor($user);
+    $b = usageTokenIdFor($user);
+
+    $this->withToken($full->plainTextToken)
+        ->deleteJson('/api/auth/usage-tokens?keep='.$a)
+        ->assertNoContent();
+
+    expect($user->tokens()->where('name', 'memry-usage')->orderBy('id')->pluck('id')->all())->toBe([$a, $b])
+        ->and($user->tokens()->whereKey($older)->exists())->toBeFalse();
+});

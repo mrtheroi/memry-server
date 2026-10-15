@@ -80,7 +80,7 @@ A second kind, the **usage token**, carries only `usage:write`. It exists to be 
 | | `401` | Missing, invalid or expired token |
 | | `403` | The caller is a usage token |
 | | `429` | Rate limit exceeded for the user |
-| `DELETE /api/auth/usage-tokens` | `204` | Revokes every usage token of the caller (named `memry-usage`, abilities exactly `["usage:write"]`). With `?keep=<id>`, revokes all of them except that one. Full-access tokens and other users' tokens are never touched. Requires a full-access token or a session |
+| `DELETE /api/auth/usage-tokens` | `204` | Revokes every usage token of the caller (named `memry-usage`, abilities exactly `["usage:write"]`). With `?keep=<id>`, revokes only the usage tokens issued before that one (lower id); that token and any issued after it survive, so concurrent clients never revoke each other's newer tokens, and leftovers die at idle expiry. Full-access tokens and other users' tokens are never touched. Requires a full-access token or a session |
 | | `401` | Missing, invalid or expired token |
 | | `403` | The caller is a usage token |
 | | `422` | `keep` is not an integer, or is not the id of one of the caller's usage tokens (another user's token, a full-access token, an unknown id). Nothing is revoked |
@@ -92,7 +92,7 @@ Intended client flow, so a failure at any step leaves a working export:
 
 1. `POST /api/auth/usage-token` to get the new token and its `id`.
 2. Commit the new token locally (for example, the OTLP header in `~/.claude/settings.json`).
-3. `DELETE /api/auth/usage-tokens?keep=<new id>` to revoke the older usage tokens. If this step fails, the leftovers still work and die after the idle window.
+3. `DELETE /api/auth/usage-tokens?keep=<new id>` to revoke the usage tokens issued before the new one. Tokens issued after it (another client's) are kept. If this step fails, the leftovers still work and die after the idle window.
 4. On disable, `DELETE /api/auth/usage-tokens` without `keep` to revoke them all.
 
 Tokens expire after 30 days without use (`MEMRY_TOKEN_IDLE_DAYS`); an expired token answers `401 {"message": "Unauthenticated."}`, like any invalid token. `php artisan memory:prune-tokens` (scheduled daily) removes them.

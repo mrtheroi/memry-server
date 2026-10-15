@@ -6,7 +6,8 @@ use App\Models\User;
 use App\Usage\Domain\UnknownUsageToken;
 
 /**
- * Revokes the user's usage tokens (`memry-usage`, `usage:write` only), optionally all but $keep.
+ * Revokes the user's usage tokens (`memry-usage`, `usage:write` only), or, with $keep, only those issued
+ * before it (ids are monotonic), so a client never revokes a newer token another client just stored.
  * Full-access tokens and other users' tokens are never touched.
  */
 final class RevokeUsageTokens
@@ -25,6 +26,6 @@ final class RevokeUsageTokens
             throw UnknownUsageToken::toKeep();
         }
 
-        $usageTokens->when($keep !== null, fn ($query) => $query->whereKeyNot($keep))->delete();
+        $usageTokens->when($keep !== null, fn ($query) => $query->where('id', '<', $keep))->delete();
     }
 }
