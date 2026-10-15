@@ -3,11 +3,9 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
-use App\Models\User;
 use App\Team\Domain\AccessContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 
 class UsageTokenController extends Controller
 {
@@ -17,17 +15,10 @@ class UsageTokenController extends Controller
             return response()->json(['message' => 'A team is required to issue a usage token.'], 403);
         }
 
-        $user = $request->user();
+        // Issue only: the previous usage token stays valid until the client revokes it with
+        // DELETE /api/auth/usage-tokens (or it idles out), so a failed local write never strands the user.
+        $token = $request->user()->createTeamToken('memry-usage', $context->teamId, ['usage:write']);
 
-        // Rotation: delete and create in one transaction so a user never holds two usage tokens.
-        $token = DB::transaction(function () use ($user, $context) {
-            // Lock order: the user row first, so two rotations for the same user serialize.
-            User::whereKey($user->id)->lockForUpdate()->first();
-            $user->tokens()->where('name', 'memry-usage')->delete();
-
-            return $user->createTeamToken('memry-usage', $context->teamId, ['usage:write']);
-        });
-
-        return response()->json(['token' => $token->plainTextToken], 201);
+        return response()->json(['id' => $token->accessToken->getKey(), 'token' => $token->plainTextToken], 201);
     }
 }

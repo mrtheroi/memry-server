@@ -6,6 +6,7 @@ use App\Http\Controllers\Auth\LoginCodeController;
 use App\Http\Controllers\Auth\MeController;
 use App\Http\Controllers\Auth\RevokeOneTokenController;
 use App\Http\Controllers\Auth\RevokeTokenController;
+use App\Http\Controllers\Auth\RevokeUsageTokensController;
 use App\Http\Controllers\Auth\SessionController;
 use App\Http\Controllers\Auth\TokenController;
 use App\Http\Controllers\Auth\UsageTokenController;
@@ -31,6 +32,7 @@ Route::middleware(['auth:sanctum', 'abilities:*'])->group(function () {
     Route::get('/context', ContextController::class)->middleware('throttle:mcp');
 
     Route::post('/auth/usage-token', UsageTokenController::class)->middleware('throttle:auth-tokens');
+    Route::delete('/auth/usage-tokens', RevokeUsageTokensController::class)->middleware('throttle:auth-tokens');
     Route::delete('/auth/token', RevokeTokenController::class)->middleware('throttle:auth-tokens');
     Route::get('/auth/tokens', ListTokensController::class)->middleware('throttle:auth-tokens');
     Route::delete('/auth/tokens/{id}', RevokeOneTokenController::class)->whereNumber('id')->middleware('throttle:auth-tokens');

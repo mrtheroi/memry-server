@@ -76,12 +76,26 @@ A second kind, the **usage token**, carries only `usage:write`. It exists to be 
 
 | Endpoint | Status | Meaning |
 | --- | --- | --- |
-| `POST /api/auth/usage-token` | `201` | `{"token": "id\|plain"}`: a new token named `memry-usage`, bound to the caller's team, with abilities `["usage:write"]`. Requires a full-access token or a session |
+| `POST /api/auth/usage-token` | `201` | `{"id": 42, "token": "id\|plain"}`: `id` is the new token's numeric id (the same number as the prefix of `token`); a new token named `memry-usage`, bound to the caller's team, with abilities `["usage:write"]`. Requires a full-access token or a session |
+| | `401` | Missing, invalid or expired token |
+| | `403` | The caller is a usage token |
+| | `429` | Rate limit exceeded for the user |
+| `DELETE /api/auth/usage-tokens` | `204` | Revokes every usage token of the caller (named `memry-usage`, abilities exactly `["usage:write"]`). It is the emergency path for a leaked token and takes no parameters. Full-access tokens and other users' tokens are never touched. Requires a full-access token or a session |
 | | `401` | Missing, invalid or expired token |
 | | `403` | The caller is a usage token |
 | | `429` | Rate limit exceeded for the user |
 
-The call **rotates**: any previous `memry-usage` token of the user is deleted in the same transaction, so a user has at most one. The plaintext is shown only in this response. The usage token follows the same idle expiry as any token (30 days without use).
+The call **only issues**: earlier `memry-usage` tokens of the user stay valid, so a client that fails to store the new token still has a working export. Revoke the old one by its exact id with `DELETE /api/auth/tokens/{id}`, or all of them with `DELETE /api/auth/usage-tokens`. The plaintext is shown only in this response. The usage token follows the same idle expiry as any token (30 days without use).
+
+Intended client flow, so a failure at any step leaves a working export:
+
+1. `POST /api/auth/usage-token` to get the new `{"id", "token"}`.
+2. Commit the new token locally (for example, the OTLP header in `~/.claude/settings.json`) and record its `id`.
+3. `DELETE /api/auth/tokens/{previous id}` to revoke the token it replaces. Treat `404` as already gone.
+4. If the local commit fails, `DELETE /api/auth/tokens/{new id}` instead, so the previous token keeps working.
+5. On disable, `DELETE /api/auth/tokens/{recorded id}`.
+
+Revoking exact ids is what makes concurrent clients and several machines safe: each client only revokes the token it recorded, never a token another client just issued and stored. Any token left behind (a crash between steps) dies after the idle window. `DELETE /api/auth/usage-tokens` revokes every usage token at once and is meant for a leaked token, not for this flow.
 
 Tokens expire after 30 days without use (`MEMRY_TOKEN_IDLE_DAYS`); an expired token answers `401 {"message": "Unauthenticated."}`, like any invalid token. `php artisan memory:prune-tokens` (scheduled daily) removes them.
 
