@@ -86,3 +86,22 @@ test('daily counts session summaries separately and memories include them', func
     expect($daily['2026-10-14'])->toBe(['date' => '2026-10-14', 'memories' => 3, 'session_summaries' => 2])
         ->and($daily['2026-10-13'])->toBe(['date' => '2026-10-13', 'memories' => 1, 'session_summaries' => 0]);
 });
+
+test('by_type counts the range by type, count descending then type ascending', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+    foreach (['decision', 'decision', 'decision', 'bugfix', 'bugfix', 'pattern', 'config', 'session_summary'] as $type) {
+        memoryOn($ada, '2026-10-10 10:00:00', $type);
+    }
+    memoryOn($ada, '2026-08-01 10:00:00', 'pattern'); // outside the range
+
+    $byType = readAs(bearerOf($ada), '/api/stats')->assertOk()->json('data.by_type');
+
+    expect($byType)->toBe([
+        ['type' => 'decision', 'count' => 3],
+        ['type' => 'bugfix', 'count' => 2],
+        ['type' => 'config', 'count' => 1],
+        ['type' => 'pattern', 'count' => 1],
+        ['type' => 'session_summary', 'count' => 1],
+    ]);
+});

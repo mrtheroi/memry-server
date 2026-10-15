@@ -21,7 +21,7 @@ class EloquentMemoryStatistics implements MemoryStatistics
         return new MemoryActivity(
             ['memories' => 0, 'projects' => 0, 'session_summaries' => 0],
             $this->daily($context, $from, $to),
-            [],
+            $this->byType($context, $from, $to),
             [],
         );
     }
@@ -36,6 +36,21 @@ class EloquentMemoryStatistics implements MemoryStatistics
             ->groupByRaw('created_at::date')
             ->get()
             ->mapWithKeys(fn ($row) => [$row->day => ['memories' => (int) $row->memories, 'session_summaries' => (int) $row->session_summaries]])
+            ->all();
+    }
+
+    /**
+     * @return list<array{type: string, count: int}>
+     */
+    private function byType(AccessContext $context, DateTimeImmutable $from, DateTimeImmutable $to): array
+    {
+        return $this->inRange($context, $from, $to)
+            ->selectRaw('type, count(*) as count')
+            ->groupBy('type')
+            ->orderByRaw('count(*) DESC')
+            ->orderBy('type')
+            ->get()
+            ->map(fn ($row) => ['type' => $row->type, 'count' => (int) $row->count])
             ->all();
     }
 
