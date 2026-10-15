@@ -404,3 +404,16 @@ test('each user is backfilled in one transaction that locks the user row first',
         expect($touches($statements, $write))->toBeGreaterThan($lock);
     }
 });
+
+test('the backfill writes the canonical project text next to project_id', function () {
+    $user = User::factory()->withoutPersonalTeam()->create();
+    $obs = [legacyObservation($user, 'Alpha'), legacyObservation($user, ' alpha '), legacyObservation($user, 'ALPHA')];
+    $prompt = legacyPrompt($user, ' Alpha ');
+    $blank = legacyObservation($user, '   ');
+
+    $this->artisan('memory:backfill-teams')->assertSuccessful();
+
+    expect(DB::table('observations')->whereIn('id', $obs)->pluck('project')->all())->toBe(['alpha', 'alpha', 'alpha'])
+        ->and(DB::table('user_prompts')->find($prompt)->project)->toBe('alpha')
+        ->and(DB::table('observations')->find($blank)->project)->toBeNull();
+});

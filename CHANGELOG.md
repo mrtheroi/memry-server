@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrade notes
 
+- **A new data migration canonicalizes legacy project names.** `canonicalize_legacy_project_names` rewrites `observations.project` and `user_prompts.project` to the canonical name of their project (`Alpha`, ` alpha ` and `ALPHA` all become `alpha`) and sets blank project text to NULL when the row has no project. It runs in batches of 1000 ids outside a wrapping transaction, writes only `project` (never `updated_at`), is safe to re-run and is not reversible. Installs created after teams have nothing to rewrite. If two legacy memories with the same scope and topic key end up in the same project, nothing is merged or deleted; an upsert by topic key then picks one of them
 - **Requires the teams release (0.19.0) first, with `memory:backfill-teams --check` reporting 0.** The new migrations `set_observations_team_id_not_null` and `set_user_prompts_team_id_not_null` make `team_id` NOT NULL on memories and prompts. If any row still has no team they stop before changing anything with `Run memory:backfill-teams first: <table> has N rows without team_id`; run `memory:backfill-teams`, confirm `--check` is 0, then migrate again. See "Upgrades" in `docs/self-hosting.md`
 
 ### Added
@@ -24,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Legacy project spellings no longer split the dashboard.** On installs upgraded from before teams, memories saved as `Alpha`, ` alpha ` or `ALPHA` shared one project but kept their raw text, so the stats counted three projects and the dashboard `project` filter missed them. The new migration `canonicalize_legacy_project_names` makes the stored text canonical, and `memory:backfill-teams` now writes the canonical text as well. See the upgrade notes
 - **`install.sh --doctor` edge cases.** When `docker compose config` fails and the `COMPOSE_PROJECT_NAME` in `.env` is an interpolation expression (for example `${PROJECT_NAME:-memry}`), the doctor now says the name cannot be resolved, makes no volume or container claim (`containers: not checked`) and prints no `docker volume rm`, instead of searching for a literal volume. A `--dir` path that does not exist and contains a `.`, `..` or empty (`//`) segment (after one leading `./` and one trailing `/`) is now refused with a usage error before any Docker call, even on a host without Docker ("Pass the install directory as the installer printed it: an absolute path without . or .. segments."), because a symlink changes where `..` leads and the doctor could otherwise look at, and offer to delete, another install's volume. Existing directories are canonicalized as before
 
 ---
