@@ -85,6 +85,51 @@ The call **rotates**: any previous `memry-usage` token of the user is deleted in
 
 Tokens expire after 30 days without use (`MEMRY_TOKEN_IDLE_DAYS`); an expired token answers `401 {"message": "Unauthenticated."}`, like any invalid token. `php artisan memory:prune-tokens` (scheduled daily) removes them.
 
+## OTLP usage ingest
+
+`POST /api/otlp/v1/metrics` receives the OpenTelemetry metrics Claude Code exports (token and cost usage) as OTLP/HTTP **JSON**. It is the only token endpoint outside the full-access group.
+
+**Auth.** `Authorization: Bearer <token>` with the `usage:write` ability: the usage token from `POST /api/auth/usage-token` (a full-access token also works). Other tokens without that ability get `403`. Identity comes only from the token: rows are stored for the token's user and team, and any `user.*`, `organization.*` or other identity attribute in the payload is ignored.
+
+**Format.** `Content-Type: application/json` (a `charset` parameter is fine), the OTLP JSON encoding of an `ExportMetricsServiceRequest`: camelCase fields, int64 values (`asInt`, `*TimeUnixNano`) as strings. Compressed bodies (`Content-Encoding`) are not supported. Only two metrics are read, everything else is ignored silently:
+
+| Metric | Stored as | Attributes read |
+| --- | --- | --- |
+| `claude_code.token.usage` (Sum) | `tokens`, with `token_type` `input`, `output`, `cacheRead` or `cacheCreation` (any other type is skipped) | `type`, `model`, `query_source`, `session.id` |
+| `claude_code.cost.usage` (Sum, USD) | `cost` | `model`, `query_source`, `session.id` |
+
+Only **delta** data points (`aggregationTemporality` 1) are stored, which is the Claude Code default. Cumulative points are skipped and reported in the response (below). Zero values are skipped, `model`, `query_source` and `session.id` are cut to 200 characters, and a missing `model` is stored as `unknown`. Points whose time window is not valid int64 nanoseconds are skipped.
+
+**Values.** A point's value is `asInt` (a decimal int64 string, or a JSON integer) or `asDouble` (a finite JSON number). Counters here are monotonic deltas, so a missing value, a non-numeric or out-of-int64-range `asInt`, an array or object, a negative number, `NaN`/`Infinity` (as strings) or a double of `1e30` or more is **invalid**. Invalid points are skipped, never a server error, and counted in `partialSuccess` (below). Values are stored as `numeric(38,6)`, so every int64 fits.
+
+**Series identity.** A series is the metric plus the **complete** attribute set of the data point (sorted by key, values normalized to strings, hashed with sha256 into `series_hash`), so points that differ in any attribute (`speed`, `effort`, `skill.name`, `mcp_server.name`, ...) are separate series and are never merged. `model`, `token_type`, `query_source` and `session_id` are also stored as columns for querying. Resource attributes are not part of the identity: they describe the exporter, are constant for it, and include `user.*` values that are never trusted.
+
+**Idempotent.** Exporters retry. Each point is stored once per team, user, series and time window (`startTimeUnixNano`, `timeUnixNano`): a unique index on `(team_id, user_id, metric, series_hash, start_unix_nano, end_unix_nano)` plus `INSERT ... ON CONFLICT DO NOTHING` makes a retried or duplicated batch a no-op, so totals never double count. A different window of the same series is a new row, and the same export sent with tokens of two teams is stored once per team.
+
+| Status | Meaning |
+| --- | --- |
+| `200` | `{}`, or `{"partialSuccess": {"rejectedDataPoints": "2", "errorMessage": "..."}}` when cumulative or invalid-value points were skipped (the rest of the request is stored) |
+| `400` | Not valid JSON, or not an OTLP metrics request: a structural field has the wrong type (for example a non-string metric `name`, a JSON object where a list belongs or the reverse, even when empty, a non-string attribute `key`). Value problems of a data point are not a 400, see `partialSuccess` (`{"message": "..."}`) |
+| `401` | Missing, invalid or expired token |
+| `403` | The token lacks `usage:write`, or has no team |
+| `413` | Body over 1 MB (checked before decoding), or more than 5000 data points of the two known metrics in one request, counting every one of them whether it is valid, cumulative, zero or invalid (nothing is stored) |
+| `415` | Not `application/json` (for example protobuf) |
+| `429` | Over 120 requests per minute per user |
+
+**Claude Code setup.** Use the `http/json` protocol; protobuf is not accepted:
+
+```sh
+export CLAUDE_CODE_ENABLE_TELEMETRY=1
+export OTEL_METRICS_EXPORTER=otlp
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/json
+export OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=https://api.memry.com.mx/api/otlp/v1/metrics
+export OTEL_EXPORTER_OTLP_METRICS_HEADERS="Authorization=Bearer <usage token>"
+```
+
+Per the OpenTelemetry spec, the per-signal `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` is used **as is** (give it the full path above), while the generic `OTEL_EXPORTER_OTLP_ENDPOINT` gets `/v1/metrics` appended (it would need to be `https://<host>/api/otlp`). Prefer the per-signal variable.
+
+Retention is not implemented yet: `usage_points` rows are kept until the user or team is deleted. A pruning job is a follow-up.
+
 ## Dashboard (session) authentication
 
 The private dashboard (a single-page app on its own subdomain, for example `https://app.memry.com.mx` talking to `https://api.memry.com.mx`) signs in with the same emailed code as the CLI, but gets a session cookie instead of a token. Only requests whose `Origin` or `Referer` is a stateful domain (`SANCTUM_STATEFUL_DOMAINS`) use the session; CLI and MCP requests carry a bearer token, send no such header and behave exactly as before.

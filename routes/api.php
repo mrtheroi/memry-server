@@ -16,6 +16,7 @@ use App\Http\Controllers\Dashboard\ListProjectsController;
 use App\Http\Controllers\Dashboard\MemoryStatsController;
 use App\Http\Controllers\Dashboard\SearchMemoriesController;
 use App\Http\Controllers\Dashboard\ShowMemoryController;
+use App\Http\Controllers\Usage\OtlpMetricsController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('/auth/code', LoginCodeController::class)->middleware('throttle:auth-code');
@@ -45,3 +46,7 @@ Route::middleware(['auth:sanctum', 'abilities:*'])->group(function () {
     Route::get('/memories/{id}', ShowMemoryController::class)->whereNumber('id')->middleware('throttle:dashboard');
     Route::delete('/memories/{id}', DeleteMemoryController::class)->whereNumber('id')->middleware('throttle:dashboard');
 });
+
+// The one token route outside the full-access group: the OpenTelemetry exporter's usage token
+// (`usage:write`, or a full-access token) may reach this and nothing else.
+Route::post('/otlp/v1/metrics', OtlpMetricsController::class)->middleware(['auth:sanctum', 'abilities:usage:write', 'throttle:otlp']);

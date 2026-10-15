@@ -19,9 +19,11 @@ Security notes for memry-server. See [API](api.md) for the endpoints they apply 
 - A token expires after 30 days without use (`MEMRY_TOKEN_IDLE_DAYS`, default 30); a token used regularly never expires. The window counts from `last_used_at`, or from creation if it was never used. An expired token gets the same `401 {"message":"Unauthenticated."}` as an invalid one.
 - Optional absolute lifetime since creation: set `expiration` (minutes) in `config/sanctum.php`; it is `null` (off) by default and combines with the idle window (the earliest wins).
 - `memory:prune-tokens` deletes expired tokens and runs daily from the scheduler.
-- **Abilities.** Every token-authenticated route (the API under `auth:sanctum` and the MCP endpoint) requires the full-access ability (`abilities:*`), declared once on the route group, so a new route inherits it. A test walks the registered routes and fails if any `auth:sanctum` route, other than the future OTLP ingest, accepts a token limited to `usage:write`.
-- **Usage tokens.** The OpenTelemetry exporter of Claude Code needs a bearer token in plaintext in `~/.claude/settings.json`. For that, `POST /api/auth/usage-token` issues a dedicated `memry-usage` token whose only ability is `usage:write`: it cannot read or write memories, list or revoke tokens, delete the account or issue tokens (all answer `403`). It can only call the usage ingest endpoint (added later). Leaking it exposes, at most, the ability to submit usage numbers for that user; revoke it with `DELETE /api/auth/tokens/{id}` or by rotating it. A user has at most one; it expires after 30 days without use like any token.
+- **Abilities.** Every token-authenticated route (the API under `auth:sanctum` and the MCP endpoint) requires the full-access ability (`abilities:*`), declared once on the route group, so a new route inherits it. A test walks the registered routes and fails if any `auth:sanctum` route, other than the OTLP ingest, accepts a token limited to `usage:write`.
+- **Usage tokens.** The OpenTelemetry exporter of Claude Code needs a bearer token in plaintext in `~/.claude/settings.json`. For that, `POST /api/auth/usage-token` issues a dedicated `memry-usage` token whose only ability is `usage:write`: it cannot read or write memories, list or revoke tokens, delete the account or issue tokens (all answer `403`). It can only call the OTLP usage ingest endpoint, `POST /api/otlp/v1/metrics`. Leaking it exposes, at most, the ability to submit usage numbers for that user; revoke it with `DELETE /api/auth/tokens/{id}` or by rotating it. A user has at most one; it expires after 30 days without use like any token.
 - Sanctum updates `last_used_at` on every authenticated request (one small UPDATE per request).
+
+- **Usage ingest.** `POST /api/otlp/v1/metrics` (`usage:write`, JSON only, body capped at 1 MB and 5000 points) stores only numbers: per user, team, metric, model, token type, query source, Claude session id and time window, plus the value. No prompt text, tool names, file paths or other attributes are stored, and the user and team come from the token, never from payload attributes such as `user.email`. A retried export cannot double count (unique per series and window). Rows are removed with the user or team; time-based retention is not implemented yet.
 
 ## Login codes
 
@@ -49,4 +51,5 @@ Beyond these limits the server returns 429.
 | `/mcp/memory`, `/api/context`, `GET /api/me` and `DELETE /api/account` (shared) | 60 requests per minute per user |
 | `POST /api/auth/code` | 3 requests per 10 minutes per email, and 10 per hour per IP |
 | `POST /api/auth/token` and `POST /api/session` (shared) | 20 requests per minute per IP |
+| `POST /api/otlp/v1/metrics` | 120 requests per minute per user |
 | `GET /api/auth/tokens`, `DELETE /api/auth/tokens/{id}`, `DELETE /api/auth/token` and `DELETE /api/session` (shared) | 10 requests per minute per user |
