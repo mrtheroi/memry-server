@@ -19,6 +19,7 @@ class ListTokensController extends Controller
             ->map(fn (PersonalAccessToken $token) => [
                 'id' => $token->id,
                 'name' => $token->name,
+                'abilities' => $token->abilities,
                 'created_at' => $token->created_at,
                 'last_used_at' => $token->last_used_at,
                 'expires_at' => $token->idleExpiresAt(),

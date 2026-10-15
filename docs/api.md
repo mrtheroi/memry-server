@@ -63,10 +63,25 @@ The email is trimmed and lowercased. The code has 6 digits, expires in 5 minutes
 | `DELETE /api/auth/token` | `204` | The token used for the request is revoked; the user's other tokens stay valid |
 | | `401` | Missing, invalid, expired (30 days without use) or already revoked token |
 | | `429` | Rate limit exceeded for the user (see [Security](security.md#rate-limits)) |
-| `GET /api/auth/tokens` | `200` | `{"data": [{"id", "name", "created_at", "last_used_at", "expires_at", "current"}]}` for the caller's tokens only. `expires_at` is when the token expires from inactivity; `current` marks the token used for the request. Hashes and plaintext are never returned |
+| `GET /api/auth/tokens` | `200` | `{"data": [{"id", "name", "abilities", "created_at", "last_used_at", "expires_at", "current"}]}` for the caller's tokens only. `expires_at` is when the token expires from inactivity; `current` marks the token used for the request; `abilities` is `["*"]` for a full-access token and `["usage:write"]` for the usage token. Hashes and plaintext are never returned |
 | `DELETE /api/auth/tokens/{id}` | `204` | That token is revoked; the others stay valid |
 | | `404` | Unknown id or a token of another user (indistinguishable) |
 | | `429` | Rate limit exceeded for the user |
+
+### Token abilities and the usage token
+
+A token carries abilities. Tokens from the login flow and `memory:token` are **full access** (`["*"]`). Every token-authenticated endpoint (all of `/api/*` behind `auth:sanctum`, and the MCP endpoint `/mcp/memory`) requires full access; dashboard sessions count as full access.
+
+A second kind, the **usage token**, carries only `usage:write`. It exists to be written into `~/.claude/settings.json` for OpenTelemetry export and is rejected with `403` on every other endpoint, including MCP, `/api/me`, the memory, stats, token and account endpoints, and this one (a usage token cannot mint another).
+
+| Endpoint | Status | Meaning |
+| --- | --- | --- |
+| `POST /api/auth/usage-token` | `201` | `{"token": "id\|plain"}`: a new token named `memry-usage`, bound to the caller's team, with abilities `["usage:write"]`. Requires a full-access token or a session |
+| | `401` | Missing, invalid or expired token |
+| | `403` | The caller is a usage token |
+| | `429` | Rate limit exceeded for the user |
+
+The call **rotates**: any previous `memry-usage` token of the user is deleted in the same transaction, so a user has at most one. The plaintext is shown only in this response. The usage token follows the same idle expiry as any token (30 days without use).
 
 Tokens expire after 30 days without use (`MEMRY_TOKEN_IDLE_DAYS`); an expired token answers `401 {"message": "Unauthenticated."}`, like any invalid token. `php artisan memory:prune-tokens` (scheduled daily) removes them.
 

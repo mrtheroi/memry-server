@@ -20,16 +20,16 @@ class User extends Authenticatable
     use HasApiTokens, HasFactory, Notifiable;
 
     /**
-     * Same as createToken (id|plaintext format, abilities ['*']) but bound to a team in the one insert.
+     * Same as createToken (id|plaintext format, abilities default to ['*']) but bound to a team in the one insert.
      */
-    public function createTeamToken(string $name, int $teamId): NewAccessToken
+    public function createTeamToken(string $name, int $teamId, array $abilities = ['*']): NewAccessToken
     {
         $plainTextToken = $this->generateTokenString();
 
         $token = $this->tokens()->create([
             'name' => $name,
             'token' => hash('sha256', $plainTextToken),
-            'abilities' => ['*'],
+            'abilities' => $abilities,
             'expires_at' => null,
             'team_id' => $teamId,
         ]);
