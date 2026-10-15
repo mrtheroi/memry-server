@@ -5,34 +5,6 @@ use App\Usage\Domain\InvalidOtlpPayload;
 use App\Usage\Domain\TooManyPoints;
 use App\Usage\Domain\UsageMetric;
 
-function attrs(array $pairs): array
-{
-    return collect($pairs)->map(fn ($v, $k) => ['key' => $k, 'value' => is_int($v) ? ['intValue' => (string) $v] : ['stringValue' => $v]])->values()->all();
-}
-
-function sumMetric(string $name, array $dataPoints, int|string $temporality = 1): array
-{
-    return ['name' => $name, 'unit' => 'tokens', 'sum' => ['aggregationTemporality' => $temporality, 'isMonotonic' => true, 'dataPoints' => $dataPoints]];
-}
-
-function otlp(array ...$metrics): array
-{
-    return ['resourceMetrics' => [[
-        'resource' => ['attributes' => attrs(['service.name' => 'claude-code'])],
-        'scopeMetrics' => [['scope' => ['name' => 'com.anthropic.claude_code'], 'metrics' => $metrics]],
-    ]]];
-}
-
-function tokenPoint(string $type, string $value, string $model = 'claude-opus-4-7', string $start = '1760000000000000000', string $end = '1760000060000000000'): array
-{
-    return [
-        'attributes' => attrs(['type' => $type, 'model' => $model, 'query_source' => 'main', 'session.id' => 'sess-1']),
-        'startTimeUnixNano' => $start,
-        'timeUnixNano' => $end,
-        'asInt' => $value,
-    ];
-}
-
 it('parses claude code token and cost delta points', function () {
     $parsed = (new OtlpMetricsParser)(otlp(
         sumMetric('claude_code.token.usage', [tokenPoint('input', '120'), tokenPoint('cacheRead', '4500', 'claude-sonnet-4-6')]),
@@ -123,6 +95,7 @@ it('accepts an empty export request', function () {
 it('rejects a payload of the wrong shape', function (array $payload) {
     (new OtlpMetricsParser)($payload);
 })->with([
+    'top level list' => [[1, 2]],
     'resourceMetrics not a list' => [['resourceMetrics' => 'x']],
     'scopeMetrics not a list' => [['resourceMetrics' => [['scopeMetrics' => 'x']]]],
     'metrics not a list' => [['resourceMetrics' => [['scopeMetrics' => [['metrics' => 'x']]]]]],

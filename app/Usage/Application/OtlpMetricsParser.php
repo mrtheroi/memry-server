@@ -30,6 +30,10 @@ final class OtlpMetricsParser
     /** @param array<mixed> $payload */
     public function __invoke(array $payload): ParsedUsage
     {
+        if ($payload !== [] && array_is_list($payload)) {
+            throw InvalidOtlpPayload::expected('a JSON object');
+        }
+
         $points = [];
         $rejected = 0;
 

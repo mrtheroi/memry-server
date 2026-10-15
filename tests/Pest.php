@@ -211,3 +211,34 @@ function personalMemory(User $author, string $title, string $project = 'dbmcp'):
         project: $project, scope: 'personal', topicKey: null, teamId: contextFor($author)->teamId,
     ));
 }
+
+/*
+ * OTLP/HTTP JSON builders shared by the usage parser and ingest tests.
+ */
+function attrs(array $pairs): array
+{
+    return collect($pairs)->map(fn ($v, $k) => ['key' => $k, 'value' => is_int($v) ? ['intValue' => (string) $v] : ['stringValue' => $v]])->values()->all();
+}
+
+function sumMetric(string $name, array $dataPoints, int|string $temporality = 1): array
+{
+    return ['name' => $name, 'unit' => 'tokens', 'sum' => ['aggregationTemporality' => $temporality, 'isMonotonic' => true, 'dataPoints' => $dataPoints]];
+}
+
+function otlp(array ...$metrics): array
+{
+    return ['resourceMetrics' => [[
+        'resource' => ['attributes' => attrs(['service.name' => 'claude-code'])],
+        'scopeMetrics' => [['scope' => ['name' => 'com.anthropic.claude_code'], 'metrics' => $metrics]],
+    ]]];
+}
+
+function tokenPoint(string $type, string $value, string $model = 'claude-opus-4-7', string $start = '1760000000000000000', string $end = '1760000060000000000'): array
+{
+    return [
+        'attributes' => attrs(['type' => $type, 'model' => $model, 'query_source' => 'main', 'session.id' => 'sess-1']),
+        'startTimeUnixNano' => $start,
+        'timeUnixNano' => $end,
+        'asInt' => $value,
+    ];
+}

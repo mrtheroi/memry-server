@@ -20,6 +20,8 @@ use App\Team\Domain\TeamSlugs;
 use App\Team\Infrastructure\EloquentAccessContextResolver;
 use App\Team\Infrastructure\RandomTeamSlugs;
 use App\Team\Infrastructure\RoleProjectAccessPolicy;
+use App\Usage\Domain\UsageRepository;
+use App\Usage\Infrastructure\Persistence\QueryUsageRepository;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
@@ -39,6 +41,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(ProjectRepository::class, QueryProjectRepository::class);
         $this->app->bind(ProjectCatalog::class, QueryProjectCatalog::class);
         $this->app->bind(MemoryStatistics::class, EloquentMemoryStatistics::class);
+        $this->app->bind(UsageRepository::class, QueryUsageRepository::class);
         $this->app->bind(TeamSlugs::class, RandomTeamSlugs::class);
         $this->app->bind(AccessContextResolver::class, EloquentAccessContextResolver::class);
         $this->app->bind(ProjectAccessPolicy::class, RoleProjectAccessPolicy::class);
@@ -57,6 +60,7 @@ class AppServiceProvider extends ServiceProvider
 
         RateLimiter::for('mcp', fn (Request $request) => Limit::perMinute(60)->by($request->user()->id));
         RateLimiter::for('dashboard', fn (Request $request) => Limit::perMinute(120)->by($request->user()->id));
+        RateLimiter::for('otlp', fn (Request $request) => Limit::perMinute(120)->by($request->user()->id));
         RateLimiter::for('auth-tokens', fn (Request $request) => Limit::perMinute(10)->by($request->user()->id));
         RateLimiter::for('auth-code', function (Request $request) {
             $email = $request->input('email');
