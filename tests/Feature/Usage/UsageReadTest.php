@@ -273,3 +273,14 @@ test('cost is an exact decimal string, never rounded through a float', function 
         ->and($data['daily'][0]['cost_usd'])->toBe('10000000000.000001')
         ->and($data['by_model'][0]['cost_usd'])->toBe('10000000000.000001');
 });
+
+test('by_model orders on the numeric token sums, not their text', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, '900', 'input', 'model-a');
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, '1000', 'input', 'model-b');
+
+    $byModel = readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data.by_model');
+
+    expect(array_column($byModel, 'model'))->toBe(['model-b', 'model-a']);
+});

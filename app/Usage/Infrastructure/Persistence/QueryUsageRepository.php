@@ -54,22 +54,33 @@ final class QueryUsageRepository implements UsageRepository
      * total row together, so daily, by_model and totals can never disagree (separate queries could each see
      * a different set of rows while the ingest writes). GROUPING(day, model) tells the rows apart: it sets a
      * bit for each expression the row is NOT grouped by.
+     *
+     * The inner query keeps every aggregate numeric, and the outer one orders on those numbers; only its
+     * projection turns them into text, so ordering never compares strings ('900' > '1000').
      */
     public function summary(int $teamId, int $userId, DateTimeImmutable $from, DateTimeImmutable $to): UsageSummary
     {
         $day = 'end_unix_nano / '.self::NANOS_PER_DAY;
-        // Token counts leave as exact integer strings: whole by ingest, and never through a PHP int or a JS number.
-        $tokens = fn (string $type) => "coalesce(sum(value) filter (where metric = 'tokens' and token_type = '{$type}'), 0)::numeric(38, 0)::text as \"{$type}\"";
+        $tokens = fn (string $type) => "coalesce(sum(value) filter (where metric = 'tokens' and token_type = '{$type}'), 0) as \"{$type}\"";
 
-        $rows = $this->inRange($teamId, $userId, $from, $to)
+        $sums = $this->inRange($teamId, $userId, $from, $to)
             ->selectRaw("grouping({$day}, model) as grouping_set, {$day} as day, model, "
                 .implode(', ', array_map($tokens, self::TOKEN_TYPES)).', '
-                ."coalesce(sum(value) filter (where metric = 'tokens'), 0)::numeric(38, 0)::text as tokens, "
+                ."coalesce(sum(value) filter (where metric = 'tokens'), 0) as tokens, "
+                ."coalesce(sum(value) filter (where metric = 'cost'), 0) as cost_usd")
+            ->groupByRaw("grouping sets (({$day}), (model), ())");
+
+        // Token counts leave as exact integer strings (whole by ingest), never through a PHP int or a JS number.
+        $asText = fn (string $column) => "sums.\"{$column}\"::numeric(38, 0)::text as \"{$column}\"";
+
+        $rows = DB::query()
+            ->fromSub($sums, 'sums')
+            ->selectRaw('sums.grouping_set, sums.day, sums.model, '
+                .implode(', ', array_map($asText, [...self::TOKEN_TYPES, 'tokens'])).', '
                 // Rounded in SQL (exact numeric) so no float error creeps into the 6 decimals.
-                ."round(coalesce(sum(value) filter (where metric = 'cost'), 0), 6) as cost_usd")
-            ->groupByRaw("grouping sets (({$day}), (model), ())")
-            ->orderByDesc('tokens')
-            ->orderBy('model')
+                .'round(sums.cost_usd, 6)::text as cost_usd')
+            ->orderByDesc('sums.tokens')
+            ->orderBy('sums.model')
             ->get()
             ->groupBy('grouping_set');
 
