@@ -1,7 +1,10 @@
 <?php
 
+use App\Memory\Domain\Observation;
+use App\Memory\Infrastructure\Persistence\EloquentMemoryRepository;
 use App\Models\User;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
@@ -39,4 +42,33 @@ test('a custom days value sets the range', function () {
 
     expect($data['range'])->toBe(['days' => 7, 'from' => '2026-10-08', 'to' => '2026-10-14'])
         ->and($data['daily'])->toHaveCount(7);
+});
+
+function memoryOn(User $author, string $createdAt, string $type = 'decision', string $project = 'dbmcp', string $scope = 'project'): void
+{
+    $saved = (new EloquentMemoryRepository)->save(new Observation(
+        userId: $author->id, sessionId: 's', type: $type, title: 'Stat '.uniqid(), content: 'c',
+        project: $project, scope: $scope, topicKey: null, teamId: contextFor($author)->teamId,
+    ));
+    DB::table('observations')->where('id', $saved->id)->update(['created_at' => $createdAt]);
+}
+
+test('daily counts memories on the UTC day of created_at', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+    memoryOn($ada, '2026-10-14 00:00:00');
+    memoryOn($ada, '2026-10-13 23:59:59');
+    memoryOn($ada, '2026-10-13 00:00:00');
+    memoryOn($ada, '2026-10-13 12:00:00');
+    memoryOn($ada, '2026-09-15 00:00:00');
+    memoryOn($ada, '2026-09-14 23:59:59'); // before the range
+
+    $daily = collect(readAs(bearerOf($ada), '/api/stats')->assertOk()->json('data.daily'))->pluck('memories', 'date');
+
+    expect($daily['2026-10-14'])->toBe(1)
+        ->and($daily['2026-10-13'])->toBe(3)
+        ->and($daily['2026-09-15'])->toBe(1)
+        ->and($daily['2026-10-12'])->toBe(0)
+        ->and($daily->sum())->toBe(5)
+        ->and($daily->keys()->all())->toBe($daily->keys()->sort()->values()->all());
 });

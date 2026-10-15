@@ -238,8 +238,9 @@ final class EloquentMemoryRepository implements MemoryRepository
 
     /**
      * scopeTo() for the dashboard: personal-scope memories are visible only to their author.
+     * Public so the dashboard statistics read through the very same rule.
      */
-    private function scopeToReadable(Builder $builder, AccessContext $context): Builder
+    public function scopeToReadable(Builder $builder, AccessContext $context): Builder
     {
         return $this->scopeTo($builder, $context)
             ->when(! $context->isSystem(), fn (Builder $scope) => $scope->where(fn (Builder $visible) => $visible
