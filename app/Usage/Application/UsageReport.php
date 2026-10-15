@@ -17,7 +17,7 @@ final class UsageReport
     /**
      * The caller's own usage on the acting team over the last $days UTC days, today included, with every day present.
      *
-     * @return array{days: int, from: string, to: string, daily: list<array{date: string, tokens: array{input: string, output: string, cacheRead: string, cacheCreation: string}, cost_usd: string}>, by_model: list<array{model: string, tokens: string, cost_usd: string}>, totals: array{tokens: string, cost_usd: string}}
+     * @return array{days: int, from: string, to: string, daily: list<array{date: string, tokens: array{input: string, output: string, cacheRead: string, cacheCreation: string}, cost_usd: string}>, by_model: list<array{model: ?string, tokens: string, cost_usd: string}>, totals: array{tokens: string, cost_usd: string}}
      */
     public function __invoke(AccessContext $context, int $days): array
     {

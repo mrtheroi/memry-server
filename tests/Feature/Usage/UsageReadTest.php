@@ -284,3 +284,39 @@ test('by_model orders on the numeric token sums, not their text', function () {
 
     expect(array_column($byModel, 'model'))->toBe(['model-b', 'model-a']);
 });
+
+test('by_model lists the top 20 models and folds the rest into one null-model remainder, last', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+    // model-01 has 1001 tokens ... model-23 has 1023; ties broken by name: model-00 and model-a both have 1000.
+    foreach (range(1, 23) as $n) {
+        ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, (string) (1000 + $n), 'input', sprintf('model-%02d', $n));
+        ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Cost, '0.000001', model: sprintf('model-%02d', $n));
+    }
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, '1000', 'input', 'model-a');
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, '1000', 'input', 'model-00');
+
+    $data = readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data');
+    $byModel = $data['by_model'];
+
+    $top = array_map(fn ($n) => sprintf('model-%02d', $n), range(23, 4));
+    expect($byModel)->toHaveCount(21)
+        ->and(array_column(array_slice($byModel, 0, 20), 'model'))->toBe($top)
+        // The remainder: model-03, model-02, model-01, model-00 and model-a.
+        ->and($byModel[20])->toBe(['model' => null, 'tokens' => (string) (1003 + 1002 + 1001 + 1000 + 1000), 'cost_usd' => '0.000003'])
+        ->and(collect($byModel)->sum(fn ($model) => whole($model['tokens'])))->toBe(whole($data['totals']['tokens']))
+        ->and(collect($byModel)->sum(fn ($model) => micros($model['cost_usd'])))->toBe(micros($data['totals']['cost_usd']));
+});
+
+test('by_model with exactly 20 models has no remainder', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+    foreach (range(1, 20) as $n) {
+        ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, (string) $n, 'input', sprintf('model-%02d', $n));
+    }
+
+    $byModel = readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data.by_model');
+
+    expect($byModel)->toHaveCount(20)
+        ->and(array_column($byModel, 'model'))->not->toContain(null);
+});
