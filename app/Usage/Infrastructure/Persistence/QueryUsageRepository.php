@@ -4,10 +4,27 @@ namespace App\Usage\Infrastructure\Persistence;
 
 use App\Usage\Domain\UsagePoint;
 use App\Usage\Domain\UsageRepository;
+use App\Usage\Domain\UsageSummary;
+use DateTimeImmutable;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
 
 final class QueryUsageRepository implements UsageRepository
 {
+    private const NANOS_PER_DAY = 86_400_000_000_000;
+
+    private const TOKEN_TYPES = ['input', 'output', 'cacheRead', 'cacheCreation'];
+
+    // GROUPING(day, model) per grouping set: grouped by day only, by model only, or neither (the total).
+    private const DAY_ROW = 1;
+
+    private const MODEL_ROW = 2;
+
+    private const TOTAL_ROW = 3;
+
+    // by_model lists this many models by tokens; the rest are summed into one remainder entry.
+    public const TOP_MODELS = 20;
+
     public function record(int $teamId, int $userId, array $points): int
     {
         if ($points === []) {
@@ -33,5 +50,91 @@ final class QueryUsageRepository implements UsageRepository
             'value' => $point->value,
             'created_at' => $now,
         ], $points));
+    }
+
+    /**
+     * One statement, one snapshot: GROUPING SETS computes the per-day rows, the per-model rows and the
+     * total row together, so daily, by_model and totals can never disagree (separate queries could each see
+     * a different set of rows while the ingest writes). GROUPING(day, model) tells the rows apart: it sets a
+     * bit for each expression the row is NOT grouped by.
+     *
+     * Every aggregate stays numeric while it is ranked and ordered; only the final projection turns them into
+     * text, so ordering never compares strings ('900' > '1000').
+     */
+    public function summary(int $teamId, int $userId, DateTimeImmutable $from, DateTimeImmutable $to): UsageSummary
+    {
+        $day = 'end_unix_nano / '.self::NANOS_PER_DAY;
+        $tokens = fn (string $type) => "coalesce(sum(value) filter (where metric = 'tokens' and token_type = '{$type}'), 0) as \"{$type}\"";
+
+        $sums = $this->inRange($teamId, $userId, $from, $to)
+            ->selectRaw("grouping({$day}, model) as grouping_set, {$day} as day, model, "
+                .implode(', ', array_map($tokens, self::TOKEN_TYPES)).', '
+                ."coalesce(sum(value) filter (where metric = 'tokens'), 0) as tokens, "
+                ."coalesce(sum(value) filter (where metric = 'cost'), 0) as cost_usd")
+            ->groupByRaw("grouping sets (({$day}), (model), ())");
+
+        $columns = [...self::TOKEN_TYPES, 'tokens'];
+        $quoted = implode(', ', array_map(fn (string $column) => "\"{$column}\"", $columns));
+        // Token counts leave as exact integer strings (whole by ingest), never through a PHP int or a JS number.
+        $asText = implode(', ', array_map(fn (string $column) => "\"{$column}\"::numeric(38, 0)::text as \"{$column}\"", $columns));
+        $zeros = implode(', ', array_fill(0, count(self::TOKEN_TYPES), '0'));
+        $modelRow = self::MODEL_ROW;
+        $top = self::TOP_MODELS;
+
+        // The model rows are ranked by tokens (then name); those past the top are folded into one remainder row
+        // with a null model, ranked last, so by_model still sums to the totals.
+        $rows = collect(DB::select(<<<SQL
+            with sums as ({$sums->toSql()}),
+            ranked as (
+                select sums.*, case when grouping_set = {$modelRow}
+                    then row_number() over (partition by grouping_set order by tokens desc, model asc) end as rank
+                from sums
+            ),
+            kept as (
+                select grouping_set, day, model, {$quoted}, cost_usd, rank from ranked where rank is null or rank <= {$top}
+                union all
+                select {$modelRow}, null, null, {$zeros}, sum(tokens), sum(cost_usd), {$top} + 1
+                from ranked where rank > {$top} having count(*) > 0
+            )
+            select grouping_set, day, model, {$asText},
+                -- Rounded in SQL (exact numeric) so no float error creeps into the 6 decimals.
+                round(cost_usd, 6)::text as cost_usd
+            from kept
+            order by rank nulls last
+            SQL, $sums->getBindings()))
+            ->groupBy('grouping_set');
+
+        $total = $rows[self::TOTAL_ROW]->sole();
+
+        return new UsageSummary(
+            // Only the four known token types are pivoted per day; tokens and by_model count every type.
+            ($rows[self::DAY_ROW] ?? collect())->mapWithKeys(fn ($row) => [gmdate('Y-m-d', (int) $row->day * 86400) => [
+                'tokens' => array_combine(self::TOKEN_TYPES, array_map(fn (string $type) => $row->{$type}, self::TOKEN_TYPES)),
+                'cost_usd' => (string) $row->cost_usd,
+            ]])->all(),
+            ($rows[self::MODEL_ROW] ?? collect())
+                ->map(fn ($row) => ['model' => $row->model, 'tokens' => $row->tokens, 'cost_usd' => (string) $row->cost_usd])
+                ->values()
+                ->all(),
+            ['tokens' => $total->tokens, 'cost_usd' => (string) $total->cost_usd],
+        );
+    }
+
+    /**
+     * The user's own points on the team that end from the start of $from through the end of $to (UTC days);
+     * the (team_id, user_id, end_unix_nano) index serves this range.
+     */
+    private function inRange(int $teamId, int $userId, DateTimeImmutable $from, DateTimeImmutable $to): Builder
+    {
+        return DB::table('usage_points')
+            ->where('team_id', $teamId)
+            ->where('user_id', $userId)
+            ->where('end_unix_nano', '>=', $this->startOfDayNanos($from))
+            ->where('end_unix_nano', '<', $this->startOfDayNanos($to->modify('+1 day')));
+    }
+
+    private function startOfDayNanos(DateTimeImmutable $day): int
+    {
+        return intdiv($day->getTimestamp(), 86400) * self::NANOS_PER_DAY;
     }
 }

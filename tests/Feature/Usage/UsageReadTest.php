@@ -1,0 +1,322 @@
+<?php
+
+use App\Models\User;
+use App\Team\Domain\AccessContext;
+use App\Usage\Application\UsageReport;
+use App\Usage\Domain\UsageMetric;
+use App\Usage\Domain\UsagePoint;
+use App\Usage\Domain\UsageRepository;
+use Carbon\CarbonImmutable;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
+
+uses(RefreshDatabase::class);
+
+test('the usage read answers 401 without credentials', function () {
+    $this->getJson('/api/usage')->assertUnauthorized();
+});
+
+test('a usage:write-only token cannot read usage', function () {
+    $user = User::factory()->create();
+    $token = $user->createTeamToken('memry-usage', contextFor($user)->teamId, ['usage:write'])->plainTextToken;
+
+    $this->withToken($token)->getJson('/api/usage')->assertForbidden();
+});
+
+test('days must be an integer from 1 to 90', function (mixed $days) {
+    $ada = User::factory()->create();
+
+    readAs(bearerOf($ada), '/api/usage?days='.$days)->assertUnprocessable()->assertJsonValidationErrors('days');
+})->with(['0', '91', '-1', 'abc', '10.5', 'empty' => '', 'blank' => '%20%20']);
+
+test('with no usage the default window is 30 UTC days, zero-filled oldest first', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+
+    $body = readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data');
+
+    $zero = ['input' => '0', 'output' => '0', 'cacheRead' => '0', 'cacheCreation' => '0'];
+    expect($body['days'])->toBe(30)
+        ->and($body['from'])->toBe('2026-09-15')
+        ->and($body['to'])->toBe('2026-10-14')
+        ->and($body['daily'])->toHaveCount(30)
+        ->and($body['daily'][0])->toBe(['date' => '2026-09-15', 'tokens' => $zero, 'cost_usd' => '0.000000'])
+        ->and($body['daily'][29])->toBe(['date' => '2026-10-14', 'tokens' => $zero, 'cost_usd' => '0.000000'])
+        ->and($body['by_model'])->toBe([])
+        ->and($body['totals'])->toBe(['tokens' => '0', 'cost_usd' => '0.000000']);
+});
+
+test('days sets the window, today included', function (int $days, string $from) {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+
+    $body = readAs(bearerOf($ada), '/api/usage?days='.$days)->assertOk()->json('data');
+
+    expect([$body['days'], $body['from'], $body['to']])->toBe([$days, $from, '2026-10-14'])
+        ->and($body['daily'])->toHaveCount($days);
+})->with([[1, '2026-10-14'], [7, '2026-10-08'], [90, '2026-07-17']]);
+
+/** Nanoseconds since the epoch of a UTC timestamp. */
+function nanosAt(string $utc): string
+{
+    return Carbon::parse($utc, 'UTC')->getTimestamp().'000000000';
+}
+
+/** Stores one point through the ingest port, ending at $endUtc (the point covers the minute before). */
+function usagePoint(int $teamId, int $userId, string $endUtc, UsageMetric $metric, string $value, ?string $tokenType = null, string $model = 'claude-opus-4-7'): void
+{
+    $end = nanosAt($endUtc);
+    $start = (string) ((int) $end - 60_000_000_000);
+
+    app(UsageRepository::class)->record($teamId, $userId, [new UsagePoint(
+        $metric, $model, $tokenType, 'main', 'sess-1', $start, $end, $value, hash('sha256', uniqid('', true)),
+    )]);
+}
+
+/** An exact integer token string as an int (the test values are small), checking it has no decimal part. */
+function whole(string $tokens): int
+{
+    expect($tokens)->toMatch('/^\\d+$/');
+
+    return (int) $tokens;
+}
+
+/** @param array<string, string> $tokens */
+function wholeSum(array $tokens): int
+{
+    return array_sum(array_map(whole(...), $tokens));
+}
+
+/** An exact 6-decimal cost string as integer micro-dollars, so cost sums are compared without floats. */
+function micros(string $usd): int
+{
+    expect($usd)->toMatch('/^\\d+\\.\\d{6}$/');
+
+    return (int) str_replace('.', '', $usd);
+}
+
+function ownUsage(User $user, string $endUtc, UsageMetric $metric, string $value, ?string $tokenType = null, string $model = 'claude-opus-4-7'): void
+{
+    usagePoint(contextFor($user)->teamId, $user->id, $endUtc, $metric, $value, $tokenType, $model);
+}
+
+test('daily sums tokens by type and cost on the UTC day of the point end time', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+    ownUsage($ada, '2026-10-14 00:00:00', UsageMetric::Tokens, '100', 'input');
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, '20', 'input');
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, '7', 'output');
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, '9000', 'cacheRead');
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, '300', 'cacheCreation');
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Cost, '0.0421');
+    ownUsage($ada, '2026-10-14 10:00:00', UsageMetric::Cost, '0.0000015');
+    ownUsage($ada, '2026-10-13 23:59:59', UsageMetric::Tokens, '5', 'output');
+    ownUsage($ada, '2026-09-15 00:00:00', UsageMetric::Tokens, '1', 'input');
+    ownUsage($ada, '2026-09-14 23:59:59', UsageMetric::Tokens, '999', 'input'); // before the window
+
+    $daily = collect(readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data.daily'))->keyBy('date');
+
+    expect($daily['2026-10-14'])->toBe(['date' => '2026-10-14', 'tokens' => ['input' => '120', 'output' => '7', 'cacheRead' => '9000', 'cacheCreation' => '300'], 'cost_usd' => '0.042102'])
+        ->and($daily['2026-10-13']['tokens'])->toBe(['input' => '0', 'output' => '5', 'cacheRead' => '0', 'cacheCreation' => '0'])
+        ->and($daily['2026-09-15']['tokens']['input'])->toBe('1')
+        ->and($daily->sum(fn ($day) => wholeSum($day['tokens'])))->toBe(9433)
+        ->and($daily->keys()->all())->toBe($daily->keys()->sort()->values()->all());
+});
+
+test('by_model and totals sum the window, most tokens first, and count token types daily leaves out', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, '100', 'input', 'claude-opus-4-7');
+    ownUsage($ada, '2026-10-13 09:00:00', UsageMetric::Tokens, '50', 'output', 'claude-opus-4-7');
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Cost, '0.5', model: 'claude-opus-4-7');
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, '9000', 'cacheRead', 'claude-sonnet-4-6');
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, '25', 'reasoning', 'claude-sonnet-4-6'); // unknown type
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Cost, '0.0000004', model: 'claude-sonnet-4-6');
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Cost, '0.25', model: 'claude-haiku-4-5'); // cost only
+    ownUsage($ada, '2026-09-01 09:00:00', UsageMetric::Tokens, '777', 'input', 'claude-opus-4-7'); // before the window
+
+    $body = readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data');
+
+    expect($body['by_model'])->toBe([
+        ['model' => 'claude-sonnet-4-6', 'tokens' => '9025', 'cost_usd' => '0.000000'],
+        ['model' => 'claude-opus-4-7', 'tokens' => '150', 'cost_usd' => '0.500000'],
+        ['model' => 'claude-haiku-4-5', 'tokens' => '0', 'cost_usd' => '0.250000'],
+    ])
+        ->and($body['totals'])->toBe(['tokens' => '9175', 'cost_usd' => '0.750000'])
+        ->and(collect($body['daily'])->sum(fn ($day) => wholeSum($day['tokens'])))->toBe(9150);
+});
+
+test('another user\'s usage on the same team never appears', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+    $bob = User::factory()->create();
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, '10', 'input');
+    usagePoint(contextFor($ada)->teamId, $bob->id, '2026-10-14 09:00:00', UsageMetric::Tokens, '500', 'input');
+    usagePoint(contextFor($ada)->teamId, $bob->id, '2026-10-14 09:00:00', UsageMetric::Cost, '3');
+    ownUsage($bob, '2026-10-14 09:00:00', UsageMetric::Tokens, '700', 'input');
+
+    $body = readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data');
+
+    expect($body['totals'])->toBe(['tokens' => '10', 'cost_usd' => '0.000000'])
+        ->and(collect($body['daily'])->last()['tokens']['input'])->toBe('10');
+});
+
+test('the caller\'s usage on another team never appears', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+    $otherTeam = sharedTeamOf($ada);
+    expect($otherTeam)->not->toBe(contextFor($ada)->teamId);
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, '10', 'input');
+    usagePoint($otherTeam, $ada->id, '2026-10-14 09:00:00', UsageMetric::Tokens, '500', 'input', 'claude-sonnet-4-6');
+
+    $body = readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data');
+
+    expect($body['totals']['tokens'])->toBe('10')
+        ->and(collect($body['by_model'])->pluck('model')->all())->toBe(['claude-opus-4-7']);
+});
+
+test('a dashboard session reads its own usage', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, '42', 'output');
+
+    sessionOf($ada)->getJson('/api/usage?days=1')->assertOk()->assertJsonPath('data.daily.0.tokens.output', '42');
+});
+
+test('a caller with no team, or the system context, gets zeros and an empty by_model', function (string $kind) {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, '10', 'input');
+
+    $context = $kind === 'denied' ? AccessContext::denied($ada->id) : AccessContext::system();
+    $report = app(UsageReport::class)($context, 7);
+
+    expect($report['daily'])->toHaveCount(7)
+        ->and(collect($report['daily'])->sum(fn ($day) => wholeSum($day['tokens'])))->toBe(0)
+        ->and($report['by_model'])->toBe([])
+        ->and($report['totals'])->toBe(['tokens' => '0', 'cost_usd' => '0.000000']);
+})->with(['denied', 'system']);
+
+test('a token sum beyond int64 comes back as the exact decimal string', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+    $teamId = contextFor($ada)->teamId;
+    // Rows inserted directly: the ingest refuses points this large, so only a direct write can build the sum.
+    foreach (['a', 'b'] as $series) {
+        DB::table('usage_points')->insert([
+            'team_id' => $teamId, 'user_id' => $ada->id, 'metric' => 'tokens', 'series_hash' => hash('sha256', $series),
+            'model' => 'claude-opus-4-7', 'token_type' => 'input', 'start_unix_nano' => nanosAt('2026-10-14 08:59:00'),
+            'end_unix_nano' => nanosAt('2026-10-14 09:00:00'), 'value' => '9223372036854775807',
+        ]);
+    }
+    $today = CarbonImmutable::parse('2026-10-14', 'UTC');
+
+    $summary = app(UsageRepository::class)->summary($teamId, $ada->id, $today, $today);
+
+    expect($summary->totals['tokens'])->toBe('18446744073709551614')
+        ->and($summary->byModel[0]['tokens'])->toBe('18446744073709551614')
+        ->and($summary->daily['2026-10-14']['tokens']['input'])->toBe('18446744073709551614');
+});
+
+test('daily, by_model and totals agree: daily sums equal the known-type totals and by_model sums equal totals', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, '100', 'input', 'claude-opus-4-7');
+    ownUsage($ada, '2026-10-12 09:00:00', UsageMetric::Tokens, '40', 'output', 'claude-opus-4-7');
+    ownUsage($ada, '2026-10-10 09:00:00', UsageMetric::Tokens, '9000', 'cacheRead', 'claude-sonnet-4-6');
+    ownUsage($ada, '2026-10-10 09:00:00', UsageMetric::Tokens, '300', 'cacheCreation', 'claude-sonnet-4-6');
+    ownUsage($ada, '2026-10-10 09:00:00', UsageMetric::Tokens, '25', 'reasoning', 'claude-sonnet-4-6'); // unknown type
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Cost, '0.5', model: 'claude-opus-4-7');
+    ownUsage($ada, '2026-10-12 09:00:00', UsageMetric::Cost, '0.25', model: 'claude-haiku-4-5');
+
+    $data = readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data');
+
+    $daily = collect($data['daily']);
+    $perType = collect(['input', 'output', 'cacheRead', 'cacheCreation'])->mapWithKeys(fn ($type) => [$type => $daily->sum(fn ($day) => whole($day['tokens'][$type]))]);
+    $unknownTypes = 25;
+
+    expect($perType->all())->toBe(['input' => 100, 'output' => 40, 'cacheRead' => 9000, 'cacheCreation' => 300])
+        ->and($perType->sum() + $unknownTypes)->toBe(whole($data['totals']['tokens']))
+        ->and(collect($data['by_model'])->sum(fn ($model) => whole($model['tokens'])))->toBe(whole($data['totals']['tokens']))
+        ->and($daily->sum(fn ($day) => micros($day['cost_usd'])))->toBe(micros($data['totals']['cost_usd']))
+        ->and(collect($data['by_model'])->sum(fn ($model) => micros($model['cost_usd'])))->toBe(micros($data['totals']['cost_usd']));
+});
+
+test('daily, by_model and totals come from one SQL statement, so they share one snapshot', function () {
+    $ada = User::factory()->create();
+    $teamId = contextFor($ada)->teamId;
+    $today = CarbonImmutable::now('UTC')->startOfDay();
+    $statements = [];
+    DB::listen(function ($query) use (&$statements) {
+        if (str_contains($query->sql, 'usage_points')) {
+            $statements[] = $query->sql;
+        }
+    });
+
+    app(UsageRepository::class)->summary($teamId, $ada->id, $today, $today);
+
+    expect($statements)->toHaveCount(1);
+});
+
+test('cost is an exact decimal string, never rounded through a float', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+    foreach (range(1, 10) as $hour) {
+        ownUsage($ada, sprintf('2026-10-14 %02d:00:00', $hour), UsageMetric::Cost, '1000000000');
+    }
+    ownUsage($ada, '2026-10-14 11:30:00', UsageMetric::Cost, '0.000001');
+
+    $data = readAs(bearerOf($ada), '/api/usage?days=1')->assertOk()->json('data');
+
+    expect($data['totals']['cost_usd'])->toBe('10000000000.000001')
+        ->and($data['daily'][0]['cost_usd'])->toBe('10000000000.000001')
+        ->and($data['by_model'][0]['cost_usd'])->toBe('10000000000.000001');
+});
+
+test('by_model orders on the numeric token sums, not their text', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, '900', 'input', 'model-a');
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, '1000', 'input', 'model-b');
+
+    $byModel = readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data.by_model');
+
+    expect(array_column($byModel, 'model'))->toBe(['model-b', 'model-a']);
+});
+
+test('by_model lists the top 20 models and folds the rest into one null-model remainder, last', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+    // model-01 has 1001 tokens ... model-23 has 1023; ties broken by name: model-00 and model-a both have 1000.
+    foreach (range(1, 23) as $n) {
+        ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, (string) (1000 + $n), 'input', sprintf('model-%02d', $n));
+        ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Cost, '0.000001', model: sprintf('model-%02d', $n));
+    }
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, '1000', 'input', 'model-a');
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, '1000', 'input', 'model-00');
+
+    $data = readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data');
+    $byModel = $data['by_model'];
+
+    $top = array_map(fn ($n) => sprintf('model-%02d', $n), range(23, 4));
+    expect($byModel)->toHaveCount(21)
+        ->and(array_column(array_slice($byModel, 0, 20), 'model'))->toBe($top)
+        // The remainder: model-03, model-02, model-01, model-00 and model-a.
+        ->and($byModel[20])->toBe(['model' => null, 'tokens' => (string) (1003 + 1002 + 1001 + 1000 + 1000), 'cost_usd' => '0.000003'])
+        ->and(collect($byModel)->sum(fn ($model) => whole($model['tokens'])))->toBe(whole($data['totals']['tokens']))
+        ->and(collect($byModel)->sum(fn ($model) => micros($model['cost_usd'])))->toBe(micros($data['totals']['cost_usd']));
+});
+
+test('by_model with exactly 20 models has no remainder', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+    foreach (range(1, 20) as $n) {
+        ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, (string) $n, 'input', sprintf('model-%02d', $n));
+    }
+
+    $byModel = readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data.by_model');
+
+    expect($byModel)->toHaveCount(20)
+        ->and(array_column($byModel, 'model'))->not->toContain(null);
+});

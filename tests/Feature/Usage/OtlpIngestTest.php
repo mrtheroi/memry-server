@@ -306,17 +306,98 @@ test('invalid values are skipped and reported, never a server error', function (
     $this->withToken(ingestToken($user))->postJson('/api/otlp/v1/metrics', $export)
         ->assertOk()
         ->assertJsonPath('partialSuccess.rejectedDataPoints', '6')
-        ->assertJsonPath('partialSuccess.errorMessage', 'memry expects delta temporality; 1 cumulative data points were skipped. Set OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta. 5 data points with an invalid value were skipped; values must be non-negative numbers.');
+        ->assertJsonPath('partialSuccess.errorMessage', 'memry expects delta temporality; 1 cumulative data points were skipped. Set OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta. 5 data points with an invalid value were skipped; values must be non-negative numbers; token values must be whole numbers up to 1000000000000 and cost values at most 1000000000.');
 
     expect(usageTotals())->toBe(['rows' => 1, 'tokens' => '7.000000', 'cost' => '0']);
 });
 
-test('the int64 maximum is stored without overflow', function () {
+test('a token point over one trillion is invalid and nothing is stored', function () {
     $this->withToken(ingestToken(User::factory()->create()))
-        ->postJson('/api/otlp/v1/metrics', otlp(sumMetric('claude_code.token.usage', [tokenPoint('input', '9223372036854775807')])))
+        ->postJson('/api/otlp/v1/metrics', otlp(sumMetric('claude_code.token.usage', [tokenPoint('input', '1000000000001')])))
+        ->assertOk()
+        ->assertJsonPath('partialSuccess.rejectedDataPoints', '1');
+
+    expect(usageTotals()['rows'])->toBe(0);
+});
+
+test('a fractional token asDouble is invalid and nothing is stored', function () {
+    $this->withToken(ingestToken(User::factory()->create()))
+        ->postJson('/api/otlp/v1/metrics', otlp(sumMetric('claude_code.token.usage', [[...tokenPoint('input', '1'), 'asInt' => null, 'asDouble' => 1.5]])))
+        ->assertOk()
+        ->assertJsonPath('partialSuccess.rejectedDataPoints', '1');
+
+    expect(usageTotals()['rows'])->toBe(0);
+});
+
+function tokenDouble(float $value): array
+{
+    return otlp(sumMetric('claude_code.token.usage', [[...tokenPoint('input', '1'), 'asInt' => null, 'asDouble' => $value]]));
+}
+
+test('a token asDouble that is fractional only past 6 decimals is invalid, decided on the raw value', function () {
+    $this->withToken(ingestToken(User::factory()->create()))
+        ->postJson('/api/otlp/v1/metrics', tokenDouble(3.0000001))
+        ->assertOk()
+        ->assertJsonPath('partialSuccess.rejectedDataPoints', '1');
+
+    expect(usageTotals()['rows'])->toBe(0);
+});
+
+test('a token asDouble below one is invalid, not silently skipped as a rounded zero', function () {
+    $this->withToken(ingestToken(User::factory()->create()))
+        ->postJson('/api/otlp/v1/metrics', tokenDouble(0.0000001))
+        ->assertOk()
+        ->assertJsonPath('partialSuccess.rejectedDataPoints', '1');
+
+    expect(usageTotals()['rows'])->toBe(0);
+});
+
+test('a raw zero token value is skipped as nothing to count, not reported', function (array $point) {
+    $this->withToken(ingestToken(User::factory()->create()))
+        ->postJson('/api/otlp/v1/metrics', otlp(sumMetric('claude_code.token.usage', [$point])))
         ->assertOk()->assertExactJson([]);
 
-    expect((string) DB::table('usage_points')->sole()->value)->toBe('9223372036854775807.000000');
+    expect(usageTotals()['rows'])->toBe(0);
+})->with([
+    'asInt 0' => [fn () => tokenPoint('input', '0')],
+    'asDouble 0.0' => [fn () => [...tokenPoint('input', '1'), 'asInt' => null, 'asDouble' => 0.0]],
+]);
+
+test('a positive cost below half a micro-dollar is stored as 0.000000, never dropped silently', function () {
+    $cost = ['attributes' => attrs(['model' => 'm']), 'startTimeUnixNano' => '1', 'timeUnixNano' => '2', 'asDouble' => 0.0000001];
+
+    $this->withToken(ingestToken(User::factory()->create()))
+        ->postJson('/api/otlp/v1/metrics', otlp(sumMetric('claude_code.cost.usage', [$cost])))
+        ->assertOk()->assertExactJson([]);
+
+    expect(usageTotals())->toBe(['rows' => 1, 'tokens' => '0', 'cost' => '0.000000']);
+});
+
+test('a whole token asDouble such as 3.0 is stored', function () {
+    $this->withToken(ingestToken(User::factory()->create()))
+        ->postJson('/api/otlp/v1/metrics', otlp(sumMetric('claude_code.token.usage', [[...tokenPoint('input', '1'), 'asInt' => null, 'asDouble' => 3.0]])))
+        ->assertOk()->assertExactJson([]);
+
+    expect(usageTotals())->toBe(['rows' => 1, 'tokens' => '3.000000', 'cost' => '0']);
+});
+
+test('a cost point over one billion USD is invalid, and exactly one billion is stored', function () {
+    $cost = fn (float|int $usd, string $end) => ['attributes' => attrs(['model' => 'm']), 'startTimeUnixNano' => '1', 'timeUnixNano' => $end, 'asDouble' => $usd];
+
+    $this->withToken(ingestToken(User::factory()->create()))
+        ->postJson('/api/otlp/v1/metrics', otlp(sumMetric('claude_code.cost.usage', [$cost(1_000_000_000.01, '2'), $cost(1_000_000_000, '3')])))
+        ->assertOk()
+        ->assertJsonPath('partialSuccess.rejectedDataPoints', '1');
+
+    expect(usageTotals())->toBe(['rows' => 1, 'tokens' => '0', 'cost' => '1000000000.000000']);
+});
+
+test('a token point of exactly one trillion, the limit, is stored', function () {
+    $this->withToken(ingestToken(User::factory()->create()))
+        ->postJson('/api/otlp/v1/metrics', otlp(sumMetric('claude_code.token.usage', [tokenPoint('input', '1000000000000')])))
+        ->assertOk()->assertExactJson([]);
+
+    expect((string) DB::table('usage_points')->sole()->value)->toBe('1000000000000.000000');
 });
 
 test('a malformed metric name or structure is a 400, never a 500', function (string $metric) {

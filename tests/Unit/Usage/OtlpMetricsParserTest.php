@@ -57,15 +57,15 @@ it('skips cumulative points and counts them as rejected', function () {
         ->and($parsed->rejectedNonDelta)->toBe(3);
 });
 
-it('skips zero values and parses asInt strings and asDouble numbers', function () {
+it('skips raw zero values, keeps a sub-micro-dollar cost as 0.000000, and parses asInt strings and asDouble numbers', function () {
     $double = fn (float|int $v) => ['attributes' => attrs(['model' => 'm']), 'startTimeUnixNano' => '1', 'timeUnixNano' => '2', 'asDouble' => $v];
 
     $parsed = parseOtlp(otlp(
-        sumMetric('claude_code.token.usage', [tokenPoint('input', '0'), tokenPoint('output', '9007199254740993')]),
+        sumMetric('claude_code.token.usage', [tokenPoint('input', '0'), tokenPoint('output', '1000000000000')]),
         sumMetric('claude_code.cost.usage', [$double(0), $double(0.0000001), $double(2), $double(0.5)]),
     ));
 
-    expect(array_map(fn ($p) => $p->value, $parsed->points))->toBe(['9007199254740993', '2.000000', '0.500000']);
+    expect(array_map(fn ($p) => $p->value, $parsed->points))->toBe(['1000000000000', '0.000000', '2.000000', '0.500000']);
 });
 
 it('caps attribute lengths, defaults a missing model and skips token points of an unknown type', function () {
@@ -204,13 +204,13 @@ it('rejects and counts data points with an invalid value instead of failing', fu
     'no value at all' => [['asInt' => null]],
 ]);
 
-it('accepts the int64 maximum, and an asInt given as a JSON number', function () {
+it('accepts the one-trillion token limit, and an asInt given as a JSON number', function () {
     $parsed = parseOtlp(otlp(sumMetric('claude_code.token.usage', [
-        tokenPoint('input', '9223372036854775807'),
+        tokenPoint('input', '1000000000000'),
         [...tokenPoint('output', '1'), 'asInt' => 42],
     ])));
 
-    expect($parsed->points[0]->value)->toBe('9223372036854775807')
+    expect($parsed->points[0]->value)->toBe('1000000000000')
         ->and($parsed->points[1]->value)->toBe('42')
         ->and($parsed->rejectedInvalid)->toBe(0);
 });

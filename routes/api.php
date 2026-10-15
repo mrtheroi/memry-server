@@ -17,6 +17,7 @@ use App\Http\Controllers\Dashboard\MemoryStatsController;
 use App\Http\Controllers\Dashboard\SearchMemoriesController;
 use App\Http\Controllers\Dashboard\ShowMemoryController;
 use App\Http\Controllers\Usage\OtlpMetricsController;
+use App\Http\Controllers\Usage\UsageReportController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('/auth/code', LoginCodeController::class)->middleware('throttle:auth-code');
@@ -41,6 +42,7 @@ Route::middleware(['auth:sanctum', 'abilities:*'])->group(function () {
 
     Route::get('/projects', ListProjectsController::class)->middleware('throttle:dashboard');
     Route::get('/stats', MemoryStatsController::class)->middleware('throttle:dashboard');
+    Route::get('/usage', UsageReportController::class)->middleware('throttle:dashboard');
     Route::get('/memories', ListMemoriesController::class)->middleware('throttle:dashboard');
     Route::get('/memories/search', SearchMemoriesController::class)->middleware('throttle:dashboard');
     Route::get('/memories/{id}', ShowMemoryController::class)->whereNumber('id')->middleware('throttle:dashboard');
