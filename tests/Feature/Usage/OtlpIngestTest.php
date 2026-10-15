@@ -318,3 +318,25 @@ test('the int64 maximum is stored without overflow', function () {
 
     expect((string) DB::table('usage_points')->sole()->value)->toBe('9223372036854775807.000000');
 });
+
+test('a malformed metric name or structure is a 400, never a 500', function (string $metric) {
+    $token = ingestToken(User::factory()->create());
+    $body = '{"resourceMetrics":[{"scopeMetrics":[{"metrics":['.$metric.']}]}]}';
+
+    rawIngest($token, $body)->assertStatus(400)->assertJsonStructure(['message']);
+
+    expect(usageTotals()['rows'])->toBe(0);
+})->with([
+    'name array' => '{"name":[],"sum":{}}',
+    'name object' => '{"name":{"a":1},"sum":{}}',
+    'name number' => '{"name":5,"sum":{}}',
+    'sum string' => '{"name":"claude_code.token.usage","sum":"x"}',
+    'temporality array' => '{"name":"claude_code.token.usage","sum":{"aggregationTemporality":[],"dataPoints":[]}}',
+]);
+
+test('rejected data points still count against the 5000 cap', function () {
+    $token = ingestToken(User::factory()->create());
+    $export = otlp(sumMetric('claude_code.token.usage', array_fill(0, 5001, tokenPoint('input', '1')), 2));
+
+    $this->withToken($token)->postJson('/api/otlp/v1/metrics', $export)->assertStatus(413);
+});

@@ -109,10 +109,10 @@ Only **delta** data points (`aggregationTemporality` 1) are stored, which is the
 | Status | Meaning |
 | --- | --- |
 | `200` | `{}`, or `{"partialSuccess": {"rejectedDataPoints": "2", "errorMessage": "..."}}` when cumulative or invalid-value points were skipped (the rest of the request is stored) |
-| `400` | Not valid JSON, or not an OTLP metrics request (`{"message": "..."}`) |
+| `400` | Not valid JSON, or not an OTLP metrics request: a structural field has the wrong type (for example a non-string metric `name`, a non-list `dataPoints`, a non-string attribute `key`). Value problems of a data point are not a 400, see `partialSuccess` (`{"message": "..."}`) |
 | `401` | Missing, invalid or expired token |
 | `403` | The token lacks `usage:write`, or has no team |
-| `413` | Body over 1 MB (checked before decoding), or more than 5000 usage data points in one request (nothing is stored) |
+| `413` | Body over 1 MB (checked before decoding), or more than 5000 data points of the two known metrics in one request, counting every one of them whether it is valid, cumulative, zero or invalid (nothing is stored) |
 | `415` | Not `application/json` (for example protobuf) |
 | `429` | Over 120 requests per minute per user |
 

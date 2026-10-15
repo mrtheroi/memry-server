@@ -220,7 +220,7 @@ function attrs(array $pairs): array
     return collect($pairs)->map(fn ($v, $k) => ['key' => $k, 'value' => is_int($v) ? ['intValue' => (string) $v] : ['stringValue' => $v]])->values()->all();
 }
 
-function sumMetric(string $name, array $dataPoints, int|string $temporality = 1): array
+function sumMetric(string $name, array $dataPoints, mixed $temporality = 1): array
 {
     return ['name' => $name, 'unit' => 'tokens', 'sum' => ['aggregationTemporality' => $temporality, 'isMonotonic' => true, 'dataPoints' => $dataPoints]];
 }

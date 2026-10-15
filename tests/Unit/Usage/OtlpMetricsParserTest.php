@@ -102,6 +102,18 @@ it('rejects a payload of the wrong shape', function (array $payload) {
     'dataPoints not a list' => [otlp(['name' => 'claude_code.token.usage', 'sum' => ['aggregationTemporality' => 1, 'dataPoints' => 'x']])],
     'resource not an object' => [['resourceMetrics' => ['x']]],
     'data point not an object' => [otlp(sumMetric('claude_code.token.usage', ['x']))],
+    'name array' => [otlp(['name' => [], 'sum' => ['aggregationTemporality' => 1, 'dataPoints' => []]])],
+    'name object' => [otlp(['name' => ['a' => 1], 'sum' => []])],
+    'name number' => [otlp(['name' => 5, 'sum' => []])],
+    'sum string' => [otlp(['name' => 'claude_code.token.usage', 'sum' => 'x'])],
+    'dataPoints object' => [otlp(['name' => 'claude_code.token.usage', 'sum' => ['aggregationTemporality' => 1, 'dataPoints' => ['a' => 1]]])],
+    'aggregationTemporality array' => [otlp(sumMetric('claude_code.token.usage', [tokenPoint('input', '1')], []))],
+    'aggregationTemporality bool' => [otlp(sumMetric('claude_code.token.usage', [tokenPoint('input', '1')], true))],
+    'attribute key number' => [otlp(sumMetric('claude_code.token.usage', [[...tokenPoint('input', '1'), 'attributes' => [['key' => 5, 'value' => ['stringValue' => 'x']]]]]))],
+    'attribute key array' => [otlp(sumMetric('claude_code.token.usage', [[...tokenPoint('input', '1'), 'attributes' => [['key' => [], 'value' => ['stringValue' => 'x']]]]]))],
+    'attribute value string' => [otlp(sumMetric('claude_code.token.usage', [[...tokenPoint('input', '1'), 'attributes' => [['key' => 'a', 'value' => 'x']]]]))],
+    'attribute not an object' => [otlp(sumMetric('claude_code.token.usage', [[...tokenPoint('input', '1'), 'attributes' => ['x']]]))],
+    'scope not an object' => [['resourceMetrics' => [['scopeMetrics' => ['x']]]]],
     'attributes not a list' => [otlp(sumMetric('claude_code.token.usage', [['attributes' => 'x', 'startTimeUnixNano' => '1', 'timeUnixNano' => '2', 'asInt' => '1']]))],
 ])->throws(InvalidOtlpPayload::class);
 
@@ -202,4 +214,30 @@ it('accepts the int64 maximum, and an asInt given as a JSON number', function ()
     expect($parsed->points[0]->value)->toBe('9223372036854775807')
         ->and($parsed->points[1]->value)->toBe('42')
         ->and($parsed->rejectedInvalid)->toBe(0);
+});
+
+it('counts every data point of a known metric against the cap, valid or not', function (callable $makePoint, int|string $temporality) {
+    $points = array_fill(0, 5001, $makePoint());
+
+    (new OtlpMetricsParser)(otlp(sumMetric('claude_code.token.usage', $points, $temporality)));
+})->with([
+    'cumulative' => [fn () => tokenPoint('input', '1'), 2],
+    'zero' => [fn () => tokenPoint('input', '0'), 1],
+    'invalid value' => [fn () => [...tokenPoint('input', '1'), 'asInt' => 'abc'], 1],
+    'bad timestamp' => [fn () => tokenPoint('input', '1', 'm', 'abc', 'abc'), 1],
+    'unknown token type' => [fn () => tokenPoint('bogus', '1'), 1],
+])->throws(TooManyPoints::class);
+
+it('accepts exactly 5000 data points of a mix of valid and skipped ones', function () {
+    $points = [...array_fill(0, 2000, tokenPoint('input', '1')), ...array_fill(0, 2000, tokenPoint('input', '0')), ...array_fill(0, 1000, tokenPoint('bogus', '1'))];
+
+    $parsed = (new OtlpMetricsParser)(otlp(sumMetric('claude_code.token.usage', $points)));
+
+    expect($parsed->points)->toHaveCount(2000);
+});
+
+it('does not count the data points of unknown metrics against the cap', function () {
+    $points = array_fill(0, 6000, tokenPoint('input', '1'));
+
+    expect((new OtlpMetricsParser)(otlp(sumMetric('some.other.metric', $points)))->points)->toBe([]);
 });

@@ -40,17 +40,23 @@ final class OtlpMetricsParser
         $points = [];
         $rejected = 0;
         $invalid = 0;
+        $seen = 0;
 
-        foreach ($this->objects($payload, 'resourceMetrics') as $resource) {
-            foreach ($this->objects($resource, 'scopeMetrics') as $scope) {
-                foreach ($this->objects($scope, 'metrics') as $metric) {
-                    $kind = self::METRICS[$metric['name'] ?? null] ?? null;
-                    if ($kind === null || ! isset($metric['sum']) || ! is_array($metric['sum'])) {
+        foreach ($this->listAt($payload, 'resourceMetrics') as $resource) {
+            foreach ($this->listAt($resource, 'scopeMetrics') as $scope) {
+                foreach ($this->listAt($scope, 'metrics') as $metric) {
+                    $name = $this->stringAt($metric, 'name');
+                    $sum = $this->arrayAt($metric, 'sum');
+                    $kind = self::METRICS[$name] ?? null;
+                    if ($kind === null || $sum === null) {
                         continue;
                     }
 
-                    $delta = in_array($metric['sum']['aggregationTemporality'] ?? null, self::DELTA, true);
-                    foreach ($this->objects($metric['sum'], 'dataPoints') as $dataPoint) {
+                    $delta = in_array($this->scalarAt($sum, 'aggregationTemporality'), self::DELTA, true);
+                    foreach ($this->listAt($sum, 'dataPoints') as $dataPoint) {
+                        // Every data point of a known metric counts against the cap, whatever happens to it next.
+                        ++$seen <= self::MAX_POINTS || throw TooManyPoints::over(self::MAX_POINTS);
+
                         if (! $delta) {
                             $rejected++;
 
@@ -68,10 +74,9 @@ final class OtlpMetricsParser
                             continue;
                         }
 
-                        $point = $this->point($kind, $metric['name'], $dataPoint, $value);
+                        $point = $this->point($kind, $name, $dataPoint, $value);
                         if ($point !== null) {
                             $points[] = $point;
-                            count($points) <= self::MAX_POINTS || throw TooManyPoints::over(self::MAX_POINTS);
                         }
                     }
                 }
@@ -82,12 +87,12 @@ final class OtlpMetricsParser
     }
 
     /**
-     * The list of objects under $key; an absent key is an empty list, anything else is a bad shape.
+     * The list of objects under $key; an absent or null key is an empty list, anything else is a bad shape.
      *
      * @param  array<mixed>  $node
      * @return list<array<mixed>>
      */
-    private function objects(array $node, string $key): array
+    private function listAt(array $node, string $key): array
     {
         $items = $node[$key] ?? [];
 
@@ -96,6 +101,41 @@ final class OtlpMetricsParser
         }
 
         return $items;
+    }
+
+    /**
+     * The object under $key, or null when absent.
+     *
+     * @param  array<mixed>  $node
+     * @return array<mixed>|null
+     */
+    private function arrayAt(array $node, string $key): ?array
+    {
+        $value = $node[$key] ?? null;
+
+        return $value === null || is_array($value) ? $value : throw InvalidOtlpPayload::expected("an object at {$key}");
+    }
+
+    /** @param array<mixed> $node */
+    private function stringAt(array $node, string $key): ?string
+    {
+        $value = $node[$key] ?? null;
+
+        return $value === null || is_string($value) ? $value : throw InvalidOtlpPayload::expected("a string at {$key}");
+    }
+
+    /**
+     * A string or integer (for example an enum given by name or number), or null when absent.
+     *
+     * @param  array<mixed>  $node
+     */
+    private function scalarAt(array $node, string $key): string|int|null
+    {
+        $value = $node[$key] ?? null;
+
+        return $value === null || is_string($value) || is_int($value)
+            ? $value
+            : throw InvalidOtlpPayload::expected("a string or integer at {$key}");
     }
 
     /** @param array<mixed> $dataPoint */
@@ -108,8 +148,9 @@ final class OtlpMetricsParser
         }
 
         $attributes = [];
-        foreach ($this->objects($dataPoint, 'attributes') as $attribute) {
-            $attributes[(string) ($attribute['key'] ?? '')] = $this->attributeValue($attribute['value'] ?? null);
+        foreach ($this->listAt($dataPoint, 'attributes') as $attribute) {
+            $key = $this->stringAt($attribute, 'key') ?? throw InvalidOtlpPayload::expected('a string at key');
+            $attributes[$key] = $this->attributeValue($this->arrayAt($attribute, 'value'));
         }
 
         $tokenType = $attributes['type'] ?? null;
@@ -146,9 +187,9 @@ final class OtlpMetricsParser
     }
 
     /** An OTLP AnyValue as a string: scalars by their JSON form, anything else as canonical JSON. */
-    private function attributeValue(mixed $value): ?string
+    private function attributeValue(?array $value): ?string
     {
-        if (! is_array($value) || $value === []) {
+        if ($value === null || $value === []) {
             return null;
         }
 
