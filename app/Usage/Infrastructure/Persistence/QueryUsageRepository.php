@@ -16,10 +16,12 @@ final class QueryUsageRepository implements UsageRepository
 
     private const TOKEN_TYPES = ['input', 'output', 'cacheRead', 'cacheCreation'];
 
-    private const TOTAL_TOKENS = "coalesce(sum(value) filter (where metric = 'tokens'), 0) as tokens";
+    // GROUPING(day, model) per grouping set: grouped by day only, by model only, or neither (the total).
+    private const DAY_ROW = 1;
 
-    // Rounded in SQL (exact numeric) so no float error creeps into the 6 decimals.
-    private const TOTAL_COST = "round(coalesce(sum(value) filter (where metric = 'cost'), 0), 6) as cost_usd";
+    private const MODEL_ROW = 2;
+
+    private const TOTAL_ROW = 3;
 
     public function record(int $teamId, int $userId, array $points): int
     {
@@ -48,63 +50,43 @@ final class QueryUsageRepository implements UsageRepository
         ], $points));
     }
 
+    /**
+     * One statement, one snapshot: GROUPING SETS computes the per-day rows, the per-model rows and the
+     * total row together, so daily, by_model and totals can never disagree (separate queries could each see
+     * a different set of rows while the ingest writes). GROUPING(day, model) tells the rows apart: it sets a
+     * bit for each expression the row is NOT grouped by.
+     */
     public function summary(int $teamId, int $userId, DateTimeImmutable $from, DateTimeImmutable $to): UsageSummary
     {
-        return new UsageSummary(
-            $this->daily($teamId, $userId, $from, $to),
-            $this->byModel($teamId, $userId, $from, $to),
-            $this->totals($teamId, $userId, $from, $to),
-        );
-    }
-
-    /**
-     * Integer division of the end time buckets each point on its UTC day (days since the epoch).
-     * Only the four known token types are pivoted.
-     *
-     * @return array<string, array{tokens: array{input: int, output: int, cacheRead: int, cacheCreation: int}, cost_usd: float}>
-     */
-    private function daily(int $teamId, int $userId, DateTimeImmutable $from, DateTimeImmutable $to): array
-    {
+        $day = 'end_unix_nano / '.self::NANOS_PER_DAY;
         $tokens = fn (string $type) => "coalesce(sum(value) filter (where metric = 'tokens' and token_type = '{$type}'), 0) as \"{$type}\"";
 
-        return $this->inRange($teamId, $userId, $from, $to)
-            ->selectRaw('end_unix_nano / '.self::NANOS_PER_DAY.' as day, '
+        $rows = $this->inRange($teamId, $userId, $from, $to)
+            ->selectRaw("grouping({$day}, model) as grouping_set, {$day} as day, model, "
                 .implode(', ', array_map($tokens, self::TOKEN_TYPES)).', '
-                .self::TOTAL_COST)
-            ->groupByRaw('end_unix_nano / '.self::NANOS_PER_DAY)
-            ->get()
-            ->mapWithKeys(fn ($row) => [gmdate('Y-m-d', (int) $row->day * 86400) => [
-                'tokens' => array_combine(self::TOKEN_TYPES, array_map(fn (string $type) => $this->tokens($row->{$type}), self::TOKEN_TYPES)),
-                'cost_usd' => (float) $row->cost_usd,
-            ]])
-            ->all();
-    }
-
-    /**
-     * Every token type counts here, including any the daily pivot leaves out.
-     *
-     * @return list<array{model: string, tokens: int, cost_usd: float}>
-     */
-    private function byModel(int $teamId, int $userId, DateTimeImmutable $from, DateTimeImmutable $to): array
-    {
-        return $this->inRange($teamId, $userId, $from, $to)
-            ->selectRaw('model, '.self::TOTAL_TOKENS.', '.self::TOTAL_COST)
-            ->groupBy('model')
+                ."coalesce(sum(value) filter (where metric = 'tokens'), 0) as tokens, "
+                // Rounded in SQL (exact numeric) so no float error creeps into the 6 decimals.
+                ."round(coalesce(sum(value) filter (where metric = 'cost'), 0), 6) as cost_usd")
+            ->groupByRaw("grouping sets (({$day}), (model), ())")
             ->orderByDesc('tokens')
             ->orderBy('model')
             ->get()
-            ->map(fn ($row) => ['model' => $row->model, 'tokens' => $this->tokens($row->tokens), 'cost_usd' => (float) $row->cost_usd])
-            ->all();
-    }
+            ->groupBy('grouping_set');
 
-    /**
-     * @return array{tokens: int, cost_usd: float}
-     */
-    private function totals(int $teamId, int $userId, DateTimeImmutable $from, DateTimeImmutable $to): array
-    {
-        $row = $this->inRange($teamId, $userId, $from, $to)->selectRaw(self::TOTAL_TOKENS.', '.self::TOTAL_COST)->first();
+        $total = $rows[self::TOTAL_ROW]->sole();
 
-        return ['tokens' => $this->tokens($row->tokens), 'cost_usd' => (float) $row->cost_usd];
+        return new UsageSummary(
+            // Only the four known token types are pivoted per day; tokens and by_model count every type.
+            ($rows[self::DAY_ROW] ?? collect())->mapWithKeys(fn ($row) => [gmdate('Y-m-d', (int) $row->day * 86400) => [
+                'tokens' => array_combine(self::TOKEN_TYPES, array_map(fn (string $type) => $this->tokens($row->{$type}), self::TOKEN_TYPES)),
+                'cost_usd' => (float) $row->cost_usd,
+            ]])->all(),
+            ($rows[self::MODEL_ROW] ?? collect())
+                ->map(fn ($row) => ['model' => $row->model, 'tokens' => $this->tokens($row->tokens), 'cost_usd' => (float) $row->cost_usd])
+                ->values()
+                ->all(),
+            ['tokens' => $this->tokens($total->tokens), 'cost_usd' => (float) $total->cost_usd],
+        );
     }
 
     /**

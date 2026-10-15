@@ -207,3 +207,43 @@ test('a token sum of exactly the int64 maximum still converts', function () {
 
     expect(app(UsageRepository::class)->summary($teamId, $ada->id, $today, $today)->totals['tokens'])->toBe(PHP_INT_MAX);
 });
+
+test('daily, by_model and totals agree: daily sums equal the known-type totals and by_model sums equal totals', function () {
+    $this->travelTo(Carbon::parse('2026-10-14 15:30:00', 'UTC'));
+    $ada = User::factory()->create();
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Tokens, '100', 'input', 'claude-opus-4-7');
+    ownUsage($ada, '2026-10-12 09:00:00', UsageMetric::Tokens, '40', 'output', 'claude-opus-4-7');
+    ownUsage($ada, '2026-10-10 09:00:00', UsageMetric::Tokens, '9000', 'cacheRead', 'claude-sonnet-4-6');
+    ownUsage($ada, '2026-10-10 09:00:00', UsageMetric::Tokens, '300', 'cacheCreation', 'claude-sonnet-4-6');
+    ownUsage($ada, '2026-10-10 09:00:00', UsageMetric::Tokens, '25', 'reasoning', 'claude-sonnet-4-6'); // unknown type
+    ownUsage($ada, '2026-10-14 09:00:00', UsageMetric::Cost, '0.5', model: 'claude-opus-4-7');
+    ownUsage($ada, '2026-10-12 09:00:00', UsageMetric::Cost, '0.25', model: 'claude-haiku-4-5');
+
+    $data = readAs(bearerOf($ada), '/api/usage')->assertOk()->json('data');
+
+    $daily = collect($data['daily']);
+    $perType = collect(['input', 'output', 'cacheRead', 'cacheCreation'])->mapWithKeys(fn ($type) => [$type => $daily->sum("tokens.{$type}")]);
+    $unknownTypes = 25;
+
+    expect($perType->all())->toBe(['input' => 100, 'output' => 40, 'cacheRead' => 9000, 'cacheCreation' => 300])
+        ->and($perType->sum() + $unknownTypes)->toBe($data['totals']['tokens'])
+        ->and(collect($data['by_model'])->sum('tokens'))->toBe($data['totals']['tokens'])
+        ->and(round($daily->sum('cost_usd'), 6))->toEqual($data['totals']['cost_usd'])
+        ->and(round(collect($data['by_model'])->sum('cost_usd'), 6))->toEqual($data['totals']['cost_usd']);
+});
+
+test('daily, by_model and totals come from one SQL statement, so they share one snapshot', function () {
+    $ada = User::factory()->create();
+    $teamId = contextFor($ada)->teamId;
+    $today = CarbonImmutable::now('UTC')->startOfDay();
+    $statements = [];
+    DB::listen(function ($query) use (&$statements) {
+        if (str_contains($query->sql, 'usage_points')) {
+            $statements[] = $query->sql;
+        }
+    });
+
+    app(UsageRepository::class)->summary($teamId, $ada->id, $today, $today);
+
+    expect($statements)->toHaveCount(1);
+});

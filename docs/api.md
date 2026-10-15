@@ -273,6 +273,7 @@ Rules:
 - **Unknown token types.** The ingest stores the `type` attribute as sent and currently drops token points whose type is not one of the four known ones, so today every stored token point is one of them. Should another type ever be stored, it is left out of `daily[].tokens` but still counted in `by_model[].tokens` and `totals.tokens`.
 - **`by_model`** sums tokens (every type) and cost per model within the window, ordered by tokens descending then model ascending. A model with only cost points appears with `tokens: 0`.
 - **`cost_usd`** is in US dollars, rounded to 6 decimals.
+- **One snapshot.** `daily`, `by_model` and `totals` come from a single SQL statement (`GROUP BY GROUPING SETS`), so they always agree: the per-type sums of `daily` plus any unknown types equal `totals.tokens`, and the `by_model` sums equal `totals`, even while new points arrive.
 - **No silent overflow.** A token sum that does not fit a 64-bit integer is an error (`500`), never a saturated number. The ingest limits (see [Values](#otlp-usage-ingest)) keep it out of reach through the API.
 
 ## Dashboard: deleting
