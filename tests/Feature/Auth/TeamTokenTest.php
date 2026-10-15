@@ -80,3 +80,11 @@ it('deletes every token of the user with tokens()->delete()', function () {
 
     expect(DB::table('personal_access_tokens')->count())->toBe(0);
 });
+
+it('creates a team token with the given abilities', function () {
+    $user = User::factory()->create();
+
+    $new = $user->createTeamToken('memry-usage', tokenPersonalTeamId($user), ['usage:write']);
+
+    expect($new->accessToken->abilities)->toBe(['usage:write']);
+});
