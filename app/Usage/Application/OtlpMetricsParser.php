@@ -28,9 +28,6 @@ final class OtlpMetricsParser
 
     public const MAX_POINTS = 5000;
 
-    // Keeps a double within numeric(38,6), which has 32 integer digits.
-    private const MAX_DOUBLE = 1.0e30;
-
     // The largest valid value of one data point per metric. No real delta comes near these; anything above
     // is invalid, which keeps every read-time sum far from overflowing (int64 for tokens).
     public const MAX_TOKENS = 1_000_000_000_000;
@@ -222,53 +219,54 @@ final class OtlpMetricsParser
     }
 
     /**
-     * The value of the data point's oneof (`asInt` or `asDouble`) as a decimal string; null for a zero
+     * The value of the data point's oneof (`asInt` or `asDouble`) as a decimal string; null for a raw zero
      * (nothing to count); false when it is missing or not a valid monotonic delta: not a decimal int64
-     * string/int, not a finite number, negative, too large for the numeric(38,6) column, above the
-     * metric's limit, or a token count that is not a whole number.
+     * string/int, not a finite number, negative, above the metric's limit, or a token count that is not a
+     * whole number. Every decision is made on the ORIGINAL value; formatting for storage comes last, only
+     * for an accepted value, so rounding can never turn an invalid value valid or a non-zero one into a skip.
      *
      * @param  array<mixed>  $dataPoint
      */
     private function value(array $dataPoint, UsageMetric $kind): string|false|null
     {
-        $value = $this->rawValue($dataPoint);
+        $number = $this->number($dataPoint);
 
-        if (! is_string($value)) {
-            return $value;
+        if ($number === false || $number < 0 || $number > self::MAX_VALUE[$kind->value]) {
+            return false;
         }
 
-        // Tokens are whole by nature: a fractional count (an asDouble like 1.5) is invalid, never truncated later.
-        $fractional = $kind === UsageMetric::Tokens && ! preg_match('/^\d+(\.0+)?$/', $value);
+        if ($number == 0) {
+            return null;
+        }
 
-        return $fractional || (float) $value > self::MAX_VALUE[$kind->value] ? false : $value;
+        // Tokens are whole by nature: a fractional count (an asDouble like 1.5 or 3.0000001) is invalid.
+        if ($kind === UsageMetric::Tokens && is_float($number) && floor($number) !== $number) {
+            return false;
+        }
+
+        // Cost keeps 6 decimals by contract: a positive cost below half a micro-dollar is stored as 0.000000.
+        return is_int($number) ? (string) $number : number_format($number, 6, '.', '');
     }
 
     /**
+     * The raw value: an int for `asInt` (a decimal int64 string or a JSON integer), a float for a finite
+     * `asDouble`, or false when it is missing or malformed.
+     *
      * @param  array<mixed>  $dataPoint
      */
-    private function rawValue(array $dataPoint): string|false|null
+    private function number(array $dataPoint): int|float|false
     {
         if (($dataPoint['asInt'] ?? null) !== null) {
             $raw = $dataPoint['asInt'];
-            $int = is_int($raw) || (is_string($raw) && preg_match('/^-?\d+$/', $raw) === 1)
+
+            return is_int($raw) || (is_string($raw) && preg_match('/^-?\d+$/', $raw) === 1)
                 ? filter_var($raw, FILTER_VALIDATE_INT)
                 : false;
-
-            return $int === false || $int < 0 ? false : ($int === 0 ? null : (string) $int);
         }
 
         $double = $dataPoint['asDouble'] ?? null;
-        if (! is_int($double) && ! is_float($double)) {
-            return false;
-        }
 
-        if (! is_finite($double) || $double < 0 || $double >= self::MAX_DOUBLE) {
-            return false;
-        }
-
-        $value = number_format($double, 6, '.', '');
-
-        return (float) $value === 0.0 ? null : $value;
+        return (is_int($double) || is_float($double)) && is_finite((float) $double) ? (float) $double : false;
     }
 
     /** An int64 Unix-nanosecond timestamp: a JSON string per OTLP, tolerating a JSON number. */

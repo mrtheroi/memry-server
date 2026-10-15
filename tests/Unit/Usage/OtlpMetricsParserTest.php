@@ -57,7 +57,7 @@ it('skips cumulative points and counts them as rejected', function () {
         ->and($parsed->rejectedNonDelta)->toBe(3);
 });
 
-it('skips zero values and parses asInt strings and asDouble numbers', function () {
+it('skips raw zero values, keeps a sub-micro-dollar cost as 0.000000, and parses asInt strings and asDouble numbers', function () {
     $double = fn (float|int $v) => ['attributes' => attrs(['model' => 'm']), 'startTimeUnixNano' => '1', 'timeUnixNano' => '2', 'asDouble' => $v];
 
     $parsed = parseOtlp(otlp(
@@ -65,7 +65,7 @@ it('skips zero values and parses asInt strings and asDouble numbers', function (
         sumMetric('claude_code.cost.usage', [$double(0), $double(0.0000001), $double(2), $double(0.5)]),
     ));
 
-    expect(array_map(fn ($p) => $p->value, $parsed->points))->toBe(['1000000000000', '2.000000', '0.500000']);
+    expect(array_map(fn ($p) => $p->value, $parsed->points))->toBe(['1000000000000', '0.000000', '2.000000', '0.500000']);
 });
 
 it('caps attribute lengths, defaults a missing model and skips token points of an unknown type', function () {
